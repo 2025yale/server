@@ -10,7 +10,6 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 const server = http.createServer(app);
 
-// [근본 해결 1] JSON 수신 용량을 50MB로 확장 (데이터 유실 방지)
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -28,12 +27,8 @@ app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
 
-    // [근본 해결 2] 데이터 도착 여부 검증
     if (!tracks || !Array.isArray(tracks)) {
-      console.error("❌ 서버가 유효한 트랙 데이터를 받지 못했습니다.");
-      return res
-        .status(400)
-        .json({ error: "Tracks data is missing or invalid." });
+      return res.status(400).json({ error: "Tracks data is missing" });
     }
 
     const socket = io.sockets.sockets.get(socketId);
@@ -41,11 +36,17 @@ app.post("/render", async (req, res) => {
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     const outputPath = path.join(tempDir, "output.mp4");
 
-    const { width = 1080, height = 1920, duration = 10 } = settings;
+    // [수정] 메모리 부족 해결을 위해 해상도를 임시로 낮춤 (540x960)
+    const width = 540;
+    const height = 960;
+    const duration = settings.duration || 10;
+
+    // 원본 대비 스케일 비율 (필터 좌표 계산용)
+    const scaleRatio = width / (settings.width || 1080);
 
     let command = ffmpeg();
 
-    // [순서 교정] 입력(input)을 먼저 선언
+    // 배경 생성 및 초기 설정
     command
       .input(`color=c=black:s=${width}x${height}:d=${duration}`)
       .inputOptions("-f lavfi");
@@ -67,18 +68,28 @@ app.post("/render", async (req, res) => {
           const currentInput = videoInputIndex++;
           const outputLabel = `v${currentInput}`;
 
-          let filter = `[${currentInput}:v]scale=${Math.round(clip.width)}:${Math.round(clip.height)}`;
+          // [수정] 좌표 및 크기를 변경된 해상도 비율에 맞게 조정
+          const w = Math.round(clip.width * scaleRatio);
+          const h = Math.round(clip.height * scaleRatio);
+          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
+
+          let filter = `[${currentInput}:v]scale=${w}:${h}`;
           if (clip.opacity < 100) {
             filter += `,format=yuva420p,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           filter += `[scaled${currentInput}];`;
-          filter += `[${lastOutputLabel}][scaled${currentInput}]overlay=x=${Math.round(clip.x - clip.width / 2)}:y=${Math.round(clip.y - clip.height / 2)}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`;
+          filter += `[${lastOutputLabel}][scaled${currentInput}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`;
 
           filterComplex.push(filter);
           lastOutputLabel = outputLabel;
         } else if (clip.type === "text") {
           const outputLabel = `txt${videoInputIndex++}`;
-          const textFilter = `drawtext=text='${clip.text}':fontcolor=${clip.textColor}:fontsize=${clip.fontSize}:x=${Math.round(clip.x - clip.width / 2)}:y=${Math.round(clip.y - clip.height / 2)}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          const fontSize = Math.round(clip.fontSize * scaleRatio);
+          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
+
+          const textFilter = `drawtext=text='${clip.text}':fontcolor=${clip.textColor}:fontsize=${fontSize}:x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           filterComplex.push(
             `[${lastOutputLabel}]${textFilter}[${outputLabel}]`,
@@ -137,6 +148,10 @@ app.post("/render", async (req, res) => {
           duration.toString(),
           "-pix_fmt",
           "yuv420p",
+          "-preset",
+          "ultrafast", // [수정] CPU/메모리 부하 최소화
+          "-max_muxing_queue_size",
+          "1024", // [수정] 메모리 대기열 제한
           "-movflags",
           "faststart",
         ])
