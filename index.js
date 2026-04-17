@@ -10,7 +10,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-const supabase = createClient("YOUR_SUPABASE_URL", "YOUR_SUPABASE_KEY");
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+);
 
 app.use(express.json());
 
