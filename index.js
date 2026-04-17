@@ -36,24 +36,25 @@ app.post("/render", async (req, res) => {
 
     const { width = 1080, height = 1920, duration = 10 } = settings;
 
+    // 1. FFmpeg 인스턴스 생성 및 '첫 번째 입력' 설정
+    // No input specified 에러를 방지하기 위해 input을 먼저 선언합니다.
     let command = ffmpeg();
 
-    // 원격 파일(HTTPS)을 읽기 위한 보안 설정 추가
+    // 배경 설정을 첫 번째 입력(0번)으로 지정
+    command
+      .input(`color=c=black:s=${width}x${height}:d=${duration}`)
+      .inputOptions("-f lavfi");
+
+    // 2. 입력이 존재하므로 이제 전역 입력 옵션을 설정할 수 있습니다.
     command.inputOptions([
       "-protocol_whitelist",
       "file,http,https,tcp,tls,crypto",
     ]);
 
-    // 0번 입력: 배경 설정 (검은색 배경)
-    command
-      .input(`color=c=black:s=${width}x${height}:d=${duration}`)
-      .inputOptions("-f lavfi");
-
     const filterComplex = [];
     let videoInputIndex = 1;
-    let lastOutputLabel = "0:v"; // 초기 배경을 시작 라벨로 지정
+    let lastOutputLabel = "0:v";
 
-    // 트랙을 순회하며 비디오/이미지/텍스트 합성
     tracks.forEach((track) => {
       if (!track.visible) return;
       track.clips.forEach((clip) => {
@@ -62,8 +63,6 @@ app.post("/render", async (req, res) => {
           const currentInput = videoInputIndex++;
           const outputLabel = `v${currentInput}`;
 
-          // 스케일링 및 오버레이 (체이닝 방식)
-          // [입력]scale -> [필터링된입력]; [이전결과][필터링된입력]overlay -> [새결과]
           let filter = `[${currentInput}:v]scale=${Math.round(clip.width)}:${Math.round(clip.height)}`;
           if (clip.opacity < 100) {
             filter += `,format=yuva420p,colorchannelmixer=aa=${clip.opacity / 100}`;
@@ -72,10 +71,9 @@ app.post("/render", async (req, res) => {
           filter += `[${lastOutputLabel}][scaled${currentInput}]overlay=x=${Math.round(clip.x - clip.width / 2)}:y=${Math.round(clip.y - clip.height / 2)}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`;
 
           filterComplex.push(filter);
-          lastOutputLabel = outputLabel; // 다음 루프에서 사용할 출력 라벨 업데이트
+          lastOutputLabel = outputLabel;
         } else if (clip.type === "text") {
           const outputLabel = `txt${videoInputIndex++}`;
-          // 텍스트 필터 추가 (Pretendard가 없을 경우 기본 폰트로 폴백되도록 처리됨)
           const textFilter = `drawtext=text='${clip.text}':fontcolor=${clip.textColor}:fontsize=${clip.fontSize}:x=${Math.round(clip.x - clip.width / 2)}:y=${Math.round(clip.y - clip.height / 2)}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           filterComplex.push(
@@ -84,7 +82,6 @@ app.post("/render", async (req, res) => {
           lastOutputLabel = outputLabel;
         } else if (clip.type === "audio") {
           command.input(clip.url);
-          // 오디오 합성은 생략되거나 추가 구현이 필요 (현재는 비디오 렌더링 중심)
         }
       });
     });
@@ -101,7 +98,6 @@ app.post("/render", async (req, res) => {
         })
         .on("error", (err) => {
           console.error("FFmpeg Error:", err);
-          if (socket) socket.emit("render-error", { message: err.message });
           reject(err);
         })
         .on("end", async () => {
@@ -129,7 +125,10 @@ app.post("/render", async (req, res) => {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
 
-            fs.rmSync(tempDir, { recursive: true, force: true });
+            if (fs.existsSync(tempDir)) {
+              fs.rmSync(tempDir, { recursive: true, force: true });
+            }
+
             if (socket) socket.emit("render-complete", { url: publicUrl });
             resolve();
           } catch (err) {
@@ -140,9 +139,9 @@ app.post("/render", async (req, res) => {
           "-t",
           duration.toString(),
           "-pix_fmt",
-          "yuv420p", // 호환성을 위한 픽셀 포맷
+          "yuv420p",
           "-movflags",
-          "faststart", // 웹 최적화
+          "faststart",
         ])
         .save(outputPath);
     });
