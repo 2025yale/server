@@ -36,19 +36,24 @@ app.post("/render", async (req, res) => {
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     const outputPath = path.join(tempDir, "output.mp4");
 
-    // [수정] 메모리 부족 해결을 위해 해상도를 임시로 낮춤 (540x960)
+    // [해결] 실제 영상 길이 계산 (가장 마지막 클립 기준)
+    let maxDuration = 0;
+    tracks.forEach((track) => {
+      track.clips.forEach((clip) => {
+        maxDuration = Math.max(maxDuration, clip.start + clip.duration);
+      });
+    });
+    const finalDuration = maxDuration > 0 ? maxDuration : 5; // 클립 없으면 5초
+
     const width = 540;
     const height = 960;
-    const duration = settings.duration || 10;
-
-    // 원본 대비 스케일 비율 (필터 좌표 계산용)
     const scaleRatio = width / (settings.width || 1080);
 
     let command = ffmpeg();
 
-    // 배경 생성 및 초기 설정
+    // 0번 입력: 검정 배경
     command
-      .input(`color=c=black:s=${width}x${height}:d=${duration}`)
+      .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
 
     command.inputOptions([
@@ -56,57 +61,78 @@ app.post("/render", async (req, res) => {
       "file,http,https,tcp,tls,crypto",
     ]);
 
-    const filterComplex = [];
+    const videoFilters = [];
+    const audioInputs = [];
     let videoInputIndex = 1;
-    let lastOutputLabel = "0:v";
+    let lastVideoLabel = "0:v";
 
-    tracks.forEach((track) => {
+    // [해결] 1번 트랙이 가장 위로 오게 하려면 낮은 번호 트랙을 나중에 렌더링
+    const sortedTracks = [...tracks].sort((a, b) => {
+      const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
+      const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
+      return bId - aId; // 큰 번호(아래쪽)부터 처리
+    });
+
+    sortedTracks.forEach((track) => {
       if (!track || !track.visible || !track.clips) return;
+
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
           command.input(clip.url);
-          const currentInput = videoInputIndex++;
-          const outputLabel = `v${currentInput}`;
+          const currentIdx = videoInputIndex++;
+          const scaledLabel = `v${currentIdx}_scaled`;
+          const outputLabel = `v${currentIdx}_out`;
 
-          // [수정] 좌표 및 크기를 변경된 해상도 비율에 맞게 조정
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          let filter = `[${currentInput}:v]scale=${w}:${h}`;
+          // 비디오 필터 구성
+          let filter = `[${currentIdx}:v]scale=${w}:${h},format=yuva420p`;
           if (clip.opacity < 100) {
-            filter += `,format=yuva420p,colorchannelmixer=aa=${clip.opacity / 100}`;
+            filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
-          filter += `[scaled${currentInput}];`;
-          filter += `[${lastOutputLabel}][scaled${currentInput}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`;
-
-          filterComplex.push(filter);
-          lastOutputLabel = outputLabel;
-        } else if (clip.type === "text") {
-          const outputLabel = `txt${videoInputIndex++}`;
-          const fontSize = Math.round(clip.fontSize * scaleRatio);
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
-
-          const textFilter = `drawtext=text='${clip.text}':fontcolor=${clip.textColor}:fontsize=${fontSize}:x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
-
-          filterComplex.push(
-            `[${lastOutputLabel}]${textFilter}[${outputLabel}]`,
+          videoFilters.push(`${filter}[${scaledLabel}]`);
+          videoFilters.push(
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
           );
-          lastOutputLabel = outputLabel;
+
+          lastVideoLabel = outputLabel;
+
+          // 오디오가 있는 비디오인 경우 오디오 입력 인덱스 보관
+          if (clip.type === "video") {
+            audioInputs.push(`[${currentIdx}:a]`);
+          }
         } else if (clip.type === "audio") {
           command.input(clip.url);
+          const currentIdx = videoInputIndex++;
+          audioInputs.push(`[${currentIdx}:a]`);
         }
+        // text 타입은 현재 건너뜀
       });
     });
 
-    const finalFilter =
-      filterComplex.length > 0 ? filterComplex.join(";") : "copy";
+    // 오디오 믹싱 필터 추가
+    if (audioInputs.length > 0) {
+      const amixFilter = `${audioInputs.join("")}amix=inputs=${audioInputs.length}:duration=longest[aout]`;
+      videoFilters.push(amixFilter);
+    }
+
+    const finalFilterComplex = videoFilters.join(";");
 
     await new Promise((resolve, reject) => {
-      command
-        .complexFilter(finalFilter, lastOutputLabel)
+      let finalCommand = command.complexFilter(
+        finalFilterComplex,
+        lastVideoLabel,
+      );
+
+      // 오디오가 있으면 최종 출력에 매핑
+      if (audioInputs.length > 0) {
+        finalCommand = finalCommand.map(lastVideoLabel).map("aout");
+      }
+
+      finalCommand
         .on("progress", (progress) => {
           if (socket)
             socket.emit("render-progress", { percent: progress.percent || 0 });
@@ -120,9 +146,8 @@ app.post("/render", async (req, res) => {
             if (
               !fs.existsSync(outputPath) ||
               fs.statSync(outputPath).size === 0
-            ) {
-              throw new Error("Rendered file is empty.");
-            }
+            )
+              throw new Error("File empty");
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.mp4`;
             const { error: uploadError } = await supabase.storage
@@ -145,13 +170,13 @@ app.post("/render", async (req, res) => {
         })
         .outputOptions([
           "-t",
-          duration.toString(),
+          finalDuration.toString(),
           "-pix_fmt",
           "yuv420p",
           "-preset",
-          "ultrafast", // [수정] CPU/메모리 부하 최소화
+          "ultrafast",
           "-max_muxing_queue_size",
-          "1024", // [수정] 메모리 대기열 제한
+          "1024",
           "-movflags",
           "faststart",
         ])
