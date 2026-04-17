@@ -36,14 +36,14 @@ app.post("/render", async (req, res) => {
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     const outputPath = path.join(tempDir, "output.mp4");
 
-    // [해결] 실제 영상 길이 계산 (가장 마지막 클립 기준)
+    // 실제 영상 길이 계산 (가장 마지막 클립 기준)
     let maxDuration = 0;
     tracks.forEach((track) => {
       track.clips.forEach((clip) => {
         maxDuration = Math.max(maxDuration, clip.start + clip.duration);
       });
     });
-    const finalDuration = maxDuration > 0 ? maxDuration : 5; // 클립 없으면 5초
+    const finalDuration = maxDuration > 0 ? maxDuration : 5;
 
     const width = 540;
     const height = 960;
@@ -51,7 +51,7 @@ app.post("/render", async (req, res) => {
 
     let command = ffmpeg();
 
-    // 0번 입력: 검정 배경
+    // 0번 입력: 배경 (모든 오버레이의 베이스)
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -63,14 +63,14 @@ app.post("/render", async (req, res) => {
 
     const videoFilters = [];
     const audioInputs = [];
-    let videoInputIndex = 1;
+    let currentInputIndex = 1; // 0번은 배경
     let lastVideoLabel = "0:v";
 
-    // [해결] 1번 트랙이 가장 위로 오게 하려면 낮은 번호 트랙을 나중에 렌더링
+    // [규칙] 1번 트랙이 최상단에 오려면, 배열의 뒷번호 트랙부터 배경 위에 쌓아야 함
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
-      return bId - aId; // 큰 번호(아래쪽)부터 처리
+      return bId - aId;
     });
 
     sortedTracks.forEach((track) => {
@@ -79,17 +79,17 @@ app.post("/render", async (req, res) => {
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
           command.input(clip.url);
-          const currentIdx = videoInputIndex++;
-          const scaledLabel = `v${currentIdx}_scaled`;
-          const outputLabel = `v${currentIdx}_out`;
+          const inputIdx = currentInputIndex++;
+          const scaledLabel = `v${inputIdx}scaled`;
+          const outputLabel = `v${inputIdx}out`;
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // 비디오 필터 구성
-          let filter = `[${currentIdx}:v]scale=${w}:${h},format=yuva420p`;
+          // 비디오 스케일링 및 오버레이 필터 체인
+          let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p`;
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
@@ -100,20 +100,20 @@ app.post("/render", async (req, res) => {
 
           lastVideoLabel = outputLabel;
 
-          // 오디오가 있는 비디오인 경우 오디오 입력 인덱스 보관
+          // 오디오 추출 (비디오 타입인 경우에만)
           if (clip.type === "video") {
-            audioInputs.push(`[${currentIdx}:a]`);
+            audioInputs.push(`[${inputIdx}:a]`);
           }
         } else if (clip.type === "audio") {
           command.input(clip.url);
-          const currentIdx = videoInputIndex++;
-          audioInputs.push(`[${currentIdx}:a]`);
+          const inputIdx = currentInputIndex++;
+          audioInputs.push(`[${inputIdx}:a]`);
         }
-        // text 타입은 현재 건너뜀
+        // text 타입은 현재 비활성화 (필요 시 로직 추가)
       });
     });
 
-    // 오디오 믹싱 필터 추가
+    // 오디오 믹싱 필터
     if (audioInputs.length > 0) {
       const amixFilter = `${audioInputs.join("")}amix=inputs=${audioInputs.length}:duration=longest[aout]`;
       videoFilters.push(amixFilter);
@@ -122,14 +122,14 @@ app.post("/render", async (req, res) => {
     const finalFilterComplex = videoFilters.join(";");
 
     await new Promise((resolve, reject) => {
-      let finalCommand = command.complexFilter(
-        finalFilterComplex,
+      // complexFilter의 두 번째 인자로 lastVideoLabel을 주면 이것이 최종 [v]가 됨
+      let finalCommand = command.complexFilter(finalFilterComplex, [
         lastVideoLabel,
-      );
+      ]);
 
-      // 오디오가 있으면 최종 출력에 매핑
+      // 오디오가 있는 경우에만 오디오 출력 매핑 추가
       if (audioInputs.length > 0) {
-        finalCommand = finalCommand.map(lastVideoLabel).map("aout");
+        finalCommand = finalCommand.map("aout");
       }
 
       finalCommand
@@ -147,7 +147,7 @@ app.post("/render", async (req, res) => {
               !fs.existsSync(outputPath) ||
               fs.statSync(outputPath).size === 0
             )
-              throw new Error("File empty");
+              throw new Error("Output file is empty");
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.mp4`;
             const { error: uploadError } = await supabase.storage
@@ -156,10 +156,13 @@ app.post("/render", async (req, res) => {
                 contentType: "video/mp4",
                 upsert: true,
               });
+
             if (uploadError) throw uploadError;
+
             const {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
+
             if (fs.existsSync(tempDir))
               fs.rmSync(tempDir, { recursive: true, force: true });
             if (socket) socket.emit("render-complete", { url: publicUrl });
