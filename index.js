@@ -10,14 +10,13 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 const server = http.createServer(app);
 
+// [근본 해결 1] JSON 수신 용량을 50MB로 확장 (데이터 유실 방지)
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
 const supabase = createClient(
@@ -28,24 +27,29 @@ const supabase = createClient(
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
-    const socket = io.sockets.sockets.get(socketId);
 
+    // [근본 해결 2] 데이터 도착 여부 검증
+    if (!tracks || !Array.isArray(tracks)) {
+      console.error("❌ 서버가 유효한 트랙 데이터를 받지 못했습니다.");
+      return res
+        .status(400)
+        .json({ error: "Tracks data is missing or invalid." });
+    }
+
+    const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     const outputPath = path.join(tempDir, "output.mp4");
 
     const { width = 1080, height = 1920, duration = 10 } = settings;
 
-    // 1. FFmpeg 인스턴스 생성 및 '첫 번째 입력' 설정
-    // No input specified 에러를 방지하기 위해 input을 먼저 선언합니다.
     let command = ffmpeg();
 
-    // 배경 설정을 첫 번째 입력(0번)으로 지정
+    // [순서 교정] 입력(input)을 먼저 선언
     command
       .input(`color=c=black:s=${width}x${height}:d=${duration}`)
       .inputOptions("-f lavfi");
 
-    // 2. 입력이 존재하므로 이제 전역 입력 옵션을 설정할 수 있습니다.
     command.inputOptions([
       "-protocol_whitelist",
       "file,http,https,tcp,tls,crypto",
@@ -56,7 +60,7 @@ app.post("/render", async (req, res) => {
     let lastOutputLabel = "0:v";
 
     tracks.forEach((track) => {
-      if (!track.visible) return;
+      if (!track || !track.visible || !track.clips) return;
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
           command.input(clip.url);
@@ -108,27 +112,20 @@ app.post("/render", async (req, res) => {
             ) {
               throw new Error("Rendered file is empty.");
             }
-
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.mp4`;
-
             const { error: uploadError } = await supabase.storage
               .from("exports")
               .upload(fileName, fileContent, {
                 contentType: "video/mp4",
                 upsert: true,
               });
-
             if (uploadError) throw uploadError;
-
             const {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
-
-            if (fs.existsSync(tempDir)) {
+            if (fs.existsSync(tempDir))
               fs.rmSync(tempDir, { recursive: true, force: true });
-            }
-
             if (socket) socket.emit("render-complete", { url: publicUrl });
             resolve();
           } catch (err) {
