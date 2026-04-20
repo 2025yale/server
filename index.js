@@ -23,6 +23,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+// 시간 문자열(HH:MM:SS.MS)을 초 단위 숫자로 변환하는 헬퍼 함수
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
   const parts = timeStr.split(":");
@@ -47,6 +48,7 @@ app.post("/render", async (req, res) => {
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
+    // 선택한 확장자 적용
     const extension = settings.ext || "mp4";
     const outputPath = path.join(tempDir, `output.${extension}`);
 
@@ -59,10 +61,11 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
+    // 전달받은 해상도 및 FPS 설정
     const width = settings.width || 405;
     const height = settings.height || 720;
     const fps = settings.fps || 24;
-    const scaleRatio = width / 1080;
+    const scaleRatio = width / 1080; // 원본 기준 좌표 계산용
 
     let command = ffmpeg();
 
@@ -80,14 +83,10 @@ app.post("/render", async (req, res) => {
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
-    // [확실한 문제 해결] 트랙 번호가 큰 것(아래쪽)부터 배경에 먼저 쌓습니다.
-    // 트랙 1번이 가장 나중에 합성되어야 트랙 2번(비디오) 위에 보입니다.
     const sortedTracks = [...tracks].sort((a, b) => {
-      const getNumId = (id) => {
-        const matched = String(id).match(/\d+/);
-        return matched ? parseInt(matched[0]) : 999;
-      };
-      return getNumId(b.id) - getNumId(a.id);
+      const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
+      const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
+      return bId - aId;
     });
 
     sortedTracks.forEach((track) => {
@@ -95,7 +94,13 @@ app.post("/render", async (req, res) => {
 
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
-          command.input(clip.url);
+          // [수정 1] 이미지인 경우 -loop 1 옵션을 추가하여 지속성 확보
+          if (clip.type === "image") {
+            command.input(clip.url).inputOptions(["-loop 1"]);
+          } else {
+            command.input(clip.url);
+          }
+
           const inputIdx = currentInputIndex++;
           const scaledLabel = `v${inputIdx}scaled`;
           const outputLabel = `v${inputIdx}out`;
@@ -105,13 +110,17 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p`;
+          // [수정 2] setpts 필터를 추가하여 클립의 시작 시간을 타임라인 절대 시간으로 동기화
+          let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p,setpts=PTS-STARTPTS+${clip.start}/TB`;
+
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
+
+          // [수정 3] overlay 필터에서 클립의 종료 시간까지만 유지되도록 설정 (shortest=0으로 스트림 유지)
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -122,6 +131,7 @@ app.post("/render", async (req, res) => {
         } else if (clip.type === "audio") {
           command.input(clip.url);
           const inputIdx = currentInputIndex++;
+          // 오디오 역시 시작 시간에 맞게 adelay 적용이 필요할 수 있으나 현재 잘 작동한다고 하시어 구조만 유지합니다.
           audioInputs.push(`[${inputIdx}:a]`);
         }
       });
