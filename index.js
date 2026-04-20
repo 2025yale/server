@@ -23,7 +23,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// 시간 문자열(HH:MM:SS.MS)을 초 단위 숫자로 변환하는 헬퍼 함수
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
   const parts = timeStr.split(":");
@@ -48,7 +47,6 @@ app.post("/render", async (req, res) => {
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-    // 선택한 확장자 적용
     const extension = settings.ext || "mp4";
     const outputPath = path.join(tempDir, `output.${extension}`);
 
@@ -61,15 +59,13 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    // 전달받은 해상도 및 FPS 설정
     const width = settings.width || 405;
     const height = settings.height || 720;
     const fps = settings.fps || 24;
-    const scaleRatio = width / 1080; // 원본 기준 좌표 계산용
+    const scaleRatio = width / 1080;
 
     let command = ffmpeg();
 
-    // 배경 캔버스 생성
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -84,7 +80,6 @@ app.post("/render", async (req, res) => {
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
-    // 트랙 ID 기준 내림차순 정렬 (큰 숫자 트랙이 아래, 작은 숫자 트랙 1번이 최상단)
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
@@ -96,15 +91,6 @@ app.post("/render", async (req, res) => {
 
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
-          // [근본 해결 1] 이미지 입력 방식 개선: 루프와 실시간 스트림 성격 부여
-          if (clip.type === "image") {
-            command
-              .input(clip.url)
-              .inputOptions(["-loop 1", `-t ${clip.duration}`]);
-          } else {
-            command.input(clip.url);
-          }
-
           const inputIdx = currentInputIndex++;
           const scaledLabel = `v${inputIdx}scaled`;
           const outputLabel = `v${inputIdx}out`;
@@ -114,25 +100,34 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // [근본 해결 2] PTS(Presentation Time Stamp)를 절대 시간축으로 고정
-          // 클립이 시작하기 전까지 빈 프레임을 생성하지 않도록 처리
-          let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p,setpts=PTS-STARTPTS+${clip.start}/TB`;
+          if (clip.type === "image") {
+            // 이미지: loop로 clip.duration만큼 늘린 뒤 clip.start 위치에 배치
+            command
+              .input(clip.url)
+              .inputOptions(["-loop", "1", "-t", String(clip.duration)]);
 
-          if (clip.opacity < 100) {
-            filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
-          }
-          videoFilters.push(`${filter}[${scaledLabel}]`);
+            let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p,setpts=PTS-STARTPTS+${clip.start}/TB`;
+            if (clip.opacity < 100) {
+              filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
+            }
+            videoFilters.push(`${filter}[${scaledLabel}]`);
+          } else {
+            // 동영상: trim으로 자른 뒤 clip.start 위치에 배치
+            command.input(clip.url);
 
-          // [근본 해결 3] overlay의 eof_action을 pass로 설정하여 스트림 병목 방지
-          videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
-          );
+            let filter = `[${inputIdx}:v]trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
+            if (clip.opacity < 100) {
+              filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
+            }
+            videoFilters.push(`${filter}[${scaledLabel}]`);
 
-          lastVideoLabel = outputLabel;
-
-          if (clip.type === "video") {
             audioInputs.push(`[${inputIdx}:a]`);
           }
+
+          videoFilters.push(
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:shortest=0[${outputLabel}]`,
+          );
+          lastVideoLabel = outputLabel;
         } else if (clip.type === "audio") {
           command.input(clip.url);
           const inputIdx = currentInputIndex++;
