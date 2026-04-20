@@ -83,9 +83,11 @@ app.post("/render", async (req, res) => {
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
+    // [수정 포인트] 1번 트랙이 가장 나중에 overlay 되어야 가장 위에 보입니다.
+    // 따라서 트랙 ID 숫자가 큰 순서대로(아래쪽 트랙부터) 정렬하여 처리합니다.
     const sortedTracks = [...tracks].sort((a, b) => {
-      const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
-      const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
+      const aId = String(a.id).includes("empty") ? 9999 : parseInt(a.id) || 0;
+      const bId = String(b.id).includes("empty") ? 9999 : parseInt(b.id) || 0;
       return bId - aId;
     });
 
@@ -109,7 +111,6 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
-          // format=auto 옵션을 추가하여 알파 채널 합성을 명확히 함
           videoFilters.push(
             `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
           );
@@ -146,7 +147,6 @@ app.post("/render", async (req, res) => {
       finalCommand
         .on("progress", (progress) => {
           if (socket) {
-            // 시간 기반 진행률 계산 (timemark: HH:MM:SS.MS)
             const currentTime = timeToSeconds(progress.timemark);
             const percent = (currentTime / finalDuration) * 100;
             socket.emit("render-progress", { percent: Math.min(99, percent) });
@@ -192,7 +192,7 @@ app.post("/render", async (req, res) => {
           "-t",
           finalDuration.toString(),
           "-r",
-          fps.toString(), // FPS 설정 주입
+          fps.toString(),
           "-pix_fmt",
           "yuv420p",
           "-preset",
