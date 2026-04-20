@@ -83,12 +83,15 @@ app.post("/render", async (req, res) => {
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
-    // [수정 포인트] 1번 트랙이 가장 나중에 overlay 되어야 가장 위에 보입니다.
-    // 따라서 트랙 ID 숫자가 큰 순서대로(아래쪽 트랙부터) 정렬하여 처리합니다.
+    // [근본 해결] 트랙 번호가 큰 것(아래쪽)부터 먼저 처리하여 배경에 깔아야 합니다.
+    // 1번 트랙이 가장 나중에(가장 위로) overlay 되도록 내림차순 정렬합니다.
     const sortedTracks = [...tracks].sort((a, b) => {
-      const aId = String(a.id).includes("empty") ? 9999 : parseInt(a.id) || 0;
-      const bId = String(b.id).includes("empty") ? 9999 : parseInt(b.id) || 0;
-      return bId - aId;
+      const getNumId = (id) => {
+        if (typeof id === "number") return id;
+        const matched = String(id).match(/\d+/);
+        return matched ? parseInt(matched[0]) : 0;
+      };
+      return getNumId(b.id) - getNumId(a.id);
     });
 
     sortedTracks.forEach((track) => {
@@ -111,6 +114,8 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
+
+          // format=auto와 함께 순차적 overlay 수행
           videoFilters.push(
             `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
           );
