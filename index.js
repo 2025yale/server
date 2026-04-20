@@ -109,8 +109,9 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
+          // format=auto 옵션을 추가하여 알파 채널 합성을 명확히 함
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
