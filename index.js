@@ -69,6 +69,7 @@ app.post("/render", async (req, res) => {
 
     let command = ffmpeg();
 
+    // 배경 캔버스 생성
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -83,6 +84,7 @@ app.post("/render", async (req, res) => {
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
+    // 트랙 ID 기준 내림차순 정렬 (큰 숫자 트랙이 아래, 작은 숫자 트랙 1번이 최상단)
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
@@ -94,9 +96,11 @@ app.post("/render", async (req, res) => {
 
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
-          // [수정 1] 이미지인 경우 -loop 1 옵션을 추가하여 지속성 확보
+          // [근본 해결 1] 이미지 입력 방식 개선: 루프와 실시간 스트림 성격 부여
           if (clip.type === "image") {
-            command.input(clip.url).inputOptions(["-loop 1"]);
+            command
+              .input(clip.url)
+              .inputOptions(["-loop 1", `-t ${clip.duration}`]);
           } else {
             command.input(clip.url);
           }
@@ -110,7 +114,8 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // [수정 2] setpts 필터를 추가하여 클립의 시작 시간을 타임라인 절대 시간으로 동기화
+          // [근본 해결 2] PTS(Presentation Time Stamp)를 절대 시간축으로 고정
+          // 클립이 시작하기 전까지 빈 프레임을 생성하지 않도록 처리
           let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p,setpts=PTS-STARTPTS+${clip.start}/TB`;
 
           if (clip.opacity < 100) {
@@ -118,9 +123,9 @@ app.post("/render", async (req, res) => {
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
 
-          // [수정 3] overlay 필터에서 클립의 종료 시간까지만 유지되도록 설정 (shortest=0으로 스트림 유지)
+          // [근본 해결 3] overlay의 eof_action을 pass로 설정하여 스트림 병목 방지
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -131,7 +136,6 @@ app.post("/render", async (req, res) => {
         } else if (clip.type === "audio") {
           command.input(clip.url);
           const inputIdx = currentInputIndex++;
-          // 오디오 역시 시작 시간에 맞게 adelay 적용이 필요할 수 있으나 현재 잘 작동한다고 하시어 구조만 유지합니다.
           audioInputs.push(`[${inputIdx}:a]`);
         }
       });
