@@ -23,6 +23,19 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+// 시간 문자열(HH:MM:SS.MS)을 초 단위 숫자로 변환하는 헬퍼 함수
+const timeToSeconds = (timeStr) => {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(":");
+  let seconds = 0;
+  if (parts.length === 3) {
+    seconds += parseInt(parts[0]) * 3600;
+    seconds += parseInt(parts[1]) * 60;
+    seconds += parseFloat(parts[2]);
+  }
+  return seconds;
+};
+
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
@@ -34,24 +47,28 @@ app.post("/render", async (req, res) => {
     const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-    const outputPath = path.join(tempDir, "output.mp4");
 
-    // 실제 영상 길이 계산 (가장 마지막 클립 기준)
+    // 선택한 확장자 적용
+    const extension = settings.ext || "mp4";
+    const outputPath = path.join(tempDir, `output.${extension}`);
+
     let maxDuration = 0;
     tracks.forEach((track) => {
       track.clips.forEach((clip) => {
         maxDuration = Math.max(maxDuration, clip.start + clip.duration);
       });
     });
-    const finalDuration = maxDuration > 0 ? maxDuration : 5;
+    const finalDuration =
+      maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    const width = 540;
-    const height = 960;
-    const scaleRatio = width / (settings.width || 1080);
+    // 전달받은 해상도 및 FPS 설정
+    const width = settings.width || 405;
+    const height = settings.height || 720;
+    const fps = settings.fps || 24;
+    const scaleRatio = width / 1080; // 원본 기준 좌표 계산용
 
     let command = ffmpeg();
 
-    // 0번 입력: 배경 (모든 오버레이의 베이스)
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -63,10 +80,9 @@ app.post("/render", async (req, res) => {
 
     const videoFilters = [];
     const audioInputs = [];
-    let currentInputIndex = 1; // 0번은 배경
+    let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
-    // [규칙] 1번 트랙이 최상단에 오려면, 배열의 뒷번호 트랙부터 배경 위에 쌓아야 함
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
@@ -88,7 +104,6 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // 비디오 스케일링 및 오버레이 필터 체인
           let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p`;
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
@@ -100,7 +115,6 @@ app.post("/render", async (req, res) => {
 
           lastVideoLabel = outputLabel;
 
-          // 오디오 추출 (비디오 타입인 경우에만)
           if (clip.type === "video") {
             audioInputs.push(`[${inputIdx}:a]`);
           }
@@ -109,11 +123,9 @@ app.post("/render", async (req, res) => {
           const inputIdx = currentInputIndex++;
           audioInputs.push(`[${inputIdx}:a]`);
         }
-        // text 타입은 현재 비활성화 (필요 시 로직 추가)
       });
     });
 
-    // 오디오 믹싱 필터
     if (audioInputs.length > 0) {
       const amixFilter = `${audioInputs.join("")}amix=inputs=${audioInputs.length}:duration=longest[aout]`;
       videoFilters.push(amixFilter);
@@ -122,20 +134,22 @@ app.post("/render", async (req, res) => {
     const finalFilterComplex = videoFilters.join(";");
 
     await new Promise((resolve, reject) => {
-      // complexFilter의 두 번째 인자로 lastVideoLabel을 주면 이것이 최종 [v]가 됨
       let finalCommand = command.complexFilter(finalFilterComplex, [
         lastVideoLabel,
       ]);
 
-      // 오디오가 있는 경우에만 오디오 출력 매핑 추가
       if (audioInputs.length > 0) {
         finalCommand = finalCommand.map("aout");
       }
 
       finalCommand
         .on("progress", (progress) => {
-          if (socket)
-            socket.emit("render-progress", { percent: progress.percent || 0 });
+          if (socket) {
+            // 시간 기반 진행률 계산 (timemark: HH:MM:SS.MS)
+            const currentTime = timeToSeconds(progress.timemark);
+            const percent = (currentTime / finalDuration) * 100;
+            socket.emit("render-progress", { percent: Math.min(99, percent) });
+          }
         })
         .on("error", (err) => {
           console.error("FFmpeg Error:", err);
@@ -148,12 +162,14 @@ app.post("/render", async (req, res) => {
               fs.statSync(outputPath).size === 0
             )
               throw new Error("Output file is empty");
+
             const fileContent = fs.readFileSync(outputPath);
-            const fileName = `render_${projectId}_${Date.now()}.mp4`;
+            const fileName = `render_${projectId}_${Date.now()}.${extension}`;
             const { error: uploadError } = await supabase.storage
               .from("exports")
               .upload(fileName, fileContent, {
-                contentType: "video/mp4",
+                contentType:
+                  extension === "mp4" ? "video/mp4" : "video/quicktime",
                 upsert: true,
               });
 
@@ -174,6 +190,8 @@ app.post("/render", async (req, res) => {
         .outputOptions([
           "-t",
           finalDuration.toString(),
+          "-r",
+          fps.toString(), // FPS 설정 주입
           "-pix_fmt",
           "yuv420p",
           "-preset",
