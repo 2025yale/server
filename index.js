@@ -23,7 +23,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// 시간 문자열(HH:MM:SS.MS)을 초 단위 숫자로 변환하는 헬퍼 함수
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
   const parts = timeStr.split(":");
@@ -48,7 +47,6 @@ app.post("/render", async (req, res) => {
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-    // 선택한 확장자 적용
     const extension = settings.ext || "mp4";
     const outputPath = path.join(tempDir, `output.${extension}`);
 
@@ -61,11 +59,10 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    // 전달받은 해상도 및 FPS 설정
     const width = settings.width || 405;
     const height = settings.height || 720;
     const fps = settings.fps || 24;
-    const scaleRatio = width / 1080; // 원본 기준 좌표 계산용
+    const scaleRatio = width / 1080;
 
     let command = ffmpeg();
 
@@ -83,13 +80,12 @@ app.post("/render", async (req, res) => {
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
-    // [근본 해결] 트랙 번호가 큰 것(아래쪽)부터 먼저 처리하여 배경에 깔아야 합니다.
-    // 1번 트랙이 가장 나중에(가장 위로) overlay 되도록 내림차순 정렬합니다.
+    // [확실한 문제 해결] 트랙 번호가 큰 것(아래쪽)부터 배경에 먼저 쌓습니다.
+    // 트랙 1번이 가장 나중에 합성되어야 트랙 2번(비디오) 위에 보입니다.
     const sortedTracks = [...tracks].sort((a, b) => {
       const getNumId = (id) => {
-        if (typeof id === "number") return id;
         const matched = String(id).match(/\d+/);
-        return matched ? parseInt(matched[0]) : 0;
+        return matched ? parseInt(matched[0]) : 999;
       };
       return getNumId(b.id) - getNumId(a.id);
     });
@@ -114,8 +110,6 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
-
-          // format=auto와 함께 순차적 overlay 수행
           videoFilters.push(
             `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${clip.start},${clip.start + clip.duration})'[${outputLabel}]`,
           );
