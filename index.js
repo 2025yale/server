@@ -86,7 +86,7 @@ app.post("/render", async (req, res) => {
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
-      return bId - aId;
+      return aId - bId; // 트랙ID 오름차순: ID 작은것(트랙1)이 마지막에 overlay되어 최상단
     });
 
     sortedTracks.forEach((track) => {
@@ -106,7 +106,7 @@ app.post("/render", async (req, res) => {
 
           let filter =
             clip.type === "image"
-              ? `[${inputIdx}:v]loop=1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`
+              ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
@@ -138,6 +138,7 @@ app.post("/render", async (req, res) => {
     console.log("=== FILTER COMPLEX ===");
     console.log(finalFilterComplex);
     console.log("======================");
+
     await new Promise((resolve, reject) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
         lastVideoLabel,
