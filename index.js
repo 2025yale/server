@@ -104,7 +104,10 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          let filter = `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
+          let filter =
+            clip.type === "image"
+              ? `[${inputIdx}:v]loop=1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`
+              : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
