@@ -76,8 +76,8 @@ app.post("/render", async (req, res) => {
     ]);
 
     const videoFilters = [];
-    const audioFilters = []; // 오디오 필터 처리를 위한 배열 추가
-    const audioLabels = []; // 믹싱할 오디오 레이블들
+    const audioFilters = [];
+    const audioLabels = [];
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
@@ -118,30 +118,30 @@ app.post("/render", async (req, res) => {
 
           lastVideoLabel = outputLabel;
 
-          // 비디오에 포함된 오디오 처리
           if (clip.type === "video") {
             const aLabel = `a${inputIdx}out`;
-            // 오디오도 비디오와 동일하게 trim 및 start 지점(delay) 설정
+            // adelay는 밀리초(ms) 단위를 사용하므로 초 * 1000 적용
+            const delayMs = Math.max(0, Math.round(clip.start * 1000));
             audioFilters.push(
-              `[${inputIdx}:a]atrim=0:${clip.duration},asetpts=PTS-STARTPTS+${clip.start}/TB[${aLabel}]`,
+              `[${inputIdx}:a]atrim=0:${clip.duration},adelay=${delayMs}|${delayMs}[${aLabel}]`,
             );
             audioLabels.push(`[${aLabel}]`);
           }
         } else if (clip.type === "audio") {
           const aLabel = `a${inputIdx}out`;
-          // 오디오 클립 trim 및 start 지점 설정
+          const delayMs = Math.max(0, Math.round(clip.start * 1000));
           audioFilters.push(
-            `[${inputIdx}:a]atrim=0:${clip.duration},asetpts=PTS-STARTPTS+${clip.start}/TB[${aLabel}]`,
+            `[${inputIdx}:a]atrim=0:${clip.duration},adelay=${delayMs}|${delayMs}[${aLabel}]`,
           );
           audioLabels.push(`[${aLabel}]`);
         }
       });
     });
 
-    // 모든 비디오 필터와 오디오 필터를 합침
     let finalFilterComplex = videoFilters.join(";");
 
     if (audioLabels.length > 0) {
+      // amix의 duration=longest와 adelay가 결합되어 정확한 위치에 오디오가 배치됨
       const amixFilter = `${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
       finalFilterComplex +=
         (finalFilterComplex ? ";" : "") +
@@ -149,10 +149,6 @@ app.post("/render", async (req, res) => {
         ";" +
         amixFilter;
     }
-
-    console.log("=== FILTER COMPLEX ===");
-    console.log(finalFilterComplex);
-    console.log("======================");
 
     await new Promise((resolve, reject) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
