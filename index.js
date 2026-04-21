@@ -23,7 +23,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// 시간 문자열(HH:MM:SS.MS)을 초 단위 숫자로 변환하는 헬퍼 함수
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
   const parts = timeStr.split(":");
@@ -48,7 +47,6 @@ app.post("/render", async (req, res) => {
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-    // 선택한 확장자 적용
     const extension = settings.ext || "mp4";
     const outputPath = path.join(tempDir, `output.${extension}`);
 
@@ -61,11 +59,10 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    // 전달받은 해상도 및 FPS 설정
     const width = settings.width || 405;
     const height = settings.height || 720;
     const fps = settings.fps || 24;
-    const scaleRatio = width / 1080; // 원본 기준 좌표 계산용
+    const scaleRatio = width / 1080;
 
     let command = ffmpeg();
 
@@ -79,23 +76,25 @@ app.post("/render", async (req, res) => {
     ]);
 
     const videoFilters = [];
-    const audioInputs = [];
+    const audioFilters = []; // 오디오 필터 처리를 위한 배열 추가
+    const audioLabels = []; // 믹싱할 오디오 레이블들
     let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
 
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
-      return aId - bId; // 트랙ID 오름차순: ID 작은것(트랙1)이 마지막에 overlay되어 최상단
+      return aId - bId;
     });
 
     sortedTracks.forEach((track) => {
       if (!track || !track.visible || !track.clips) return;
 
       track.clips.forEach((clip) => {
+        const inputIdx = currentInputIndex++;
+        command.input(clip.url);
+
         if (clip.type === "video" || clip.type === "image") {
-          command.input(clip.url);
-          const inputIdx = currentInputIndex++;
           const scaledLabel = `v${inputIdx}scaled`;
           const outputLabel = `v${inputIdx}out`;
 
@@ -108,6 +107,7 @@ app.post("/render", async (req, res) => {
             clip.type === "image"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
+
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
@@ -118,23 +118,38 @@ app.post("/render", async (req, res) => {
 
           lastVideoLabel = outputLabel;
 
+          // 비디오에 포함된 오디오 처리
           if (clip.type === "video") {
-            audioInputs.push(`[${inputIdx}:a]`);
+            const aLabel = `a${inputIdx}out`;
+            // 오디오도 비디오와 동일하게 trim 및 start 지점(delay) 설정
+            audioFilters.push(
+              `[${inputIdx}:a]atrim=0:${clip.duration},asetpts=PTS-STARTPTS+${clip.start}/TB[${aLabel}]`,
+            );
+            audioLabels.push(`[${aLabel}]`);
           }
         } else if (clip.type === "audio") {
-          command.input(clip.url);
-          const inputIdx = currentInputIndex++;
-          audioInputs.push(`[${inputIdx}:a]`);
+          const aLabel = `a${inputIdx}out`;
+          // 오디오 클립 trim 및 start 지점 설정
+          audioFilters.push(
+            `[${inputIdx}:a]atrim=0:${clip.duration},asetpts=PTS-STARTPTS+${clip.start}/TB[${aLabel}]`,
+          );
+          audioLabels.push(`[${aLabel}]`);
         }
       });
     });
 
-    if (audioInputs.length > 0) {
-      const amixFilter = `${audioInputs.join("")}amix=inputs=${audioInputs.length}:duration=longest[aout]`;
-      videoFilters.push(amixFilter);
+    // 모든 비디오 필터와 오디오 필터를 합침
+    let finalFilterComplex = videoFilters.join(";");
+
+    if (audioLabels.length > 0) {
+      const amixFilter = `${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
+      finalFilterComplex +=
+        (finalFilterComplex ? ";" : "") +
+        audioFilters.join(";") +
+        ";" +
+        amixFilter;
     }
 
-    const finalFilterComplex = videoFilters.join(";");
     console.log("=== FILTER COMPLEX ===");
     console.log(finalFilterComplex);
     console.log("======================");
@@ -144,14 +159,13 @@ app.post("/render", async (req, res) => {
         lastVideoLabel,
       ]);
 
-      if (audioInputs.length > 0) {
+      if (audioLabels.length > 0) {
         finalCommand = finalCommand.map("aout");
       }
 
       finalCommand
         .on("progress", (progress) => {
           if (socket) {
-            // 시간 기반 진행률 계산 (timemark: HH:MM:SS.MS)
             const currentTime = timeToSeconds(progress.timemark);
             const percent = (currentTime / finalDuration) * 100;
             socket.emit("render-progress", { percent: Math.min(99, percent) });
@@ -197,7 +211,7 @@ app.post("/render", async (req, res) => {
           "-t",
           finalDuration.toString(),
           "-r",
-          fps.toString(), // FPS 설정 주입
+          fps.toString(),
           "-pix_fmt",
           "yuv420p",
           "-preset",
