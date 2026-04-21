@@ -135,7 +135,9 @@ app.post("/render", async (req, res) => {
     }
 
     const finalFilterComplex = videoFilters.join(";");
-
+    console.log("=== FILTER COMPLEX ===");
+    console.log(finalFilterComplex);
+    console.log("======================");
     await new Promise((resolve, reject) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
         lastVideoLabel,
