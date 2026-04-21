@@ -23,6 +23,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+// 시간 문자열(HH:MM:SS.MS)을 초 단위 숫자로 변환하는 헬퍼 함수
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
   const parts = timeStr.split(":");
@@ -47,6 +48,7 @@ app.post("/render", async (req, res) => {
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
+    // 선택한 확장자 적용
     const extension = settings.ext || "mp4";
     const outputPath = path.join(tempDir, `output.${extension}`);
 
@@ -59,10 +61,11 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
+    // 전달받은 해상도 및 FPS 설정
     const width = settings.width || 405;
     const height = settings.height || 720;
     const fps = settings.fps || 24;
-    const scaleRatio = width / 1080;
+    const scaleRatio = width / 1080; // 원본 기준 좌표 계산용
 
     let command = ffmpeg();
 
@@ -91,6 +94,7 @@ app.post("/render", async (req, res) => {
 
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
+          command.input(clip.url);
           const inputIdx = currentInputIndex++;
           const scaledLabel = `v${inputIdx}scaled`;
           const outputLabel = `v${inputIdx}out`;
@@ -100,34 +104,20 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          if (clip.type === "image") {
-            // 이미지: loop로 clip.duration만큼 늘린 뒤 clip.start 위치에 배치
-            command
-              .input(clip.url)
-              .inputOptions(["-loop", "1", "-t", String(clip.duration)]);
+          let filter = `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
+          if (clip.opacity < 100) {
+            filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
+          }
+          videoFilters.push(`${filter}[${scaledLabel}]`);
+          videoFilters.push(
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:eof_action=pass[${outputLabel}]`,
+          );
 
-            let filter = `[${inputIdx}:v]scale=${w}:${h},format=yuva420p,setpts=PTS-STARTPTS+${clip.start}/TB`;
-            if (clip.opacity < 100) {
-              filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
-            }
-            videoFilters.push(`${filter}[${scaledLabel}]`);
-          } else {
-            // 동영상: trim으로 자른 뒤 clip.start 위치에 배치
-            command.input(clip.url);
+          lastVideoLabel = outputLabel;
 
-            let filter = `[${inputIdx}:v]trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
-            if (clip.opacity < 100) {
-              filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
-            }
-            videoFilters.push(`${filter}[${scaledLabel}]`);
-
+          if (clip.type === "video") {
             audioInputs.push(`[${inputIdx}:a]`);
           }
-
-          videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:shortest=0[${outputLabel}]`,
-          );
-          lastVideoLabel = outputLabel;
         } else if (clip.type === "audio") {
           command.input(clip.url);
           const inputIdx = currentInputIndex++;
@@ -155,6 +145,7 @@ app.post("/render", async (req, res) => {
       finalCommand
         .on("progress", (progress) => {
           if (socket) {
+            // 시간 기반 진행률 계산 (timemark: HH:MM:SS.MS)
             const currentTime = timeToSeconds(progress.timemark);
             const percent = (currentTime / finalDuration) * 100;
             socket.emit("render-progress", { percent: Math.min(99, percent) });
@@ -200,7 +191,7 @@ app.post("/render", async (req, res) => {
           "-t",
           finalDuration.toString(),
           "-r",
-          fps.toString(),
+          fps.toString(), // FPS 설정 주입
           "-pix_fmt",
           "yuv420p",
           "-preset",
