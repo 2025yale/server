@@ -35,7 +35,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// 폰트 매핑 (절대 경로 보장)
+// 폰트 매핑
 const FONT_PATHS = {
   NotoSansKR: {
     normal: path.join(__dirname, "assets", "fonts", "NotoSansKR-Medium.ttf"),
@@ -101,7 +101,6 @@ app.post("/render", async (req, res) => {
 
     let command = ffmpeg();
 
-    // 0번 입력: 배경 블랙 캔버스
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -118,16 +117,16 @@ app.post("/render", async (req, res) => {
     let lastVideoLabel = "0:v";
     let filterCounter = 0;
 
+    // [중요 수정] 트랙 번호가 높은 것부터 먼저 렌더링하여 트랙 1이 맨 위에 오도록 내림차순 정렬
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
       const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
-      return aId - bId;
+      return bId - aId;
     });
 
     sortedTracks.forEach((track) => {
       if (!track || !track.visible || !track.clips) return;
 
-      // 클립들도 시작 시간 순으로 정렬하여 레이어 순서 보장
       const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
 
       sortedClips.forEach((clip) => {
@@ -202,10 +201,8 @@ app.post("/render", async (req, res) => {
             fontPath = FONT_PATHS[fontFam].bold;
           }
 
-          // 폰트 파일 존재 여부 강제 체크
           if (!fs.existsSync(fontPath)) {
             console.error(`❌ Font missing at: ${fontPath}`);
-            // 파일이 없으면 기본 폰트로 대체 시도
             fontPath = FONT_PATHS["NotoSansKR"].normal;
           }
 
@@ -311,5 +308,5 @@ app.post("/render", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
