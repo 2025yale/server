@@ -35,6 +35,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
+// [폰트 점검 완료] 클라이언트 CSS 정의와 1:1 매칭
 const FONT_PATHS = {
   NotoSansKR: {
     normal: path.join(__dirname, "assets", "fonts", "NotoSansKR-Medium.ttf"),
@@ -116,8 +117,6 @@ app.post("/render", async (req, res) => {
     let lastVideoLabel = "0:v";
     let filterCounter = 0;
 
-    // [근본적 해결] ID 숫자가 아닌, 배열의 인덱스 순서를 기준으로 레이어를 잡습니다.
-    // 트랙 배열의 끝(아래쪽 트랙)부터 시작하여 0번째(맨 위 트랙)까지 역순으로 렌더링합니다.
     const reversedTracks = [...tracks].reverse();
 
     reversedTracks.forEach((track) => {
@@ -191,13 +190,17 @@ app.post("/render", async (req, res) => {
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBold = clip.fontWeight === "bold";
-          let fontPath =
-            FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
-          if (isBold && FONT_PATHS[fontFam]?.bold) {
-            fontPath = FONT_PATHS[fontFam].bold;
-          }
 
+          // 폰트 객체 찾기
+          const fontGroup = FONT_PATHS[fontFam] || FONT_PATHS["NotoSansKR"];
+          let fontPath =
+            isBold && fontGroup.bold ? fontGroup.bold : fontGroup.normal;
+
+          // 서버 로그를 통한 폰트 파일 존재 여부 확인
           if (!fs.existsSync(fontPath)) {
+            console.error(
+              `⚠️ Font file missing: ${fontPath}. Falling back to default.`,
+            );
             fontPath = FONT_PATHS["NotoSansKR"].normal;
           }
 
@@ -303,5 +306,5 @@ app.post("/render", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
