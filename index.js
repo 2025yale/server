@@ -35,7 +35,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// 폰트 매핑 설정 (서버 기준 경로)
+// 폰트 매핑 (서버 절대 경로 사용)
 const FONT_PATHS = {
   NotoSansKR: {
     normal: path.join(__dirname, "assets", "fonts", "NotoSansKR-Medium.ttf"),
@@ -171,21 +171,24 @@ app.post("/render", async (req, res) => {
           );
           audioLabels.push(`[${aLabel}]`);
         } else if (clip.type === "text") {
-          // 텍스트는 별도의 input 없이 drawtext 필터로 처리
           const outputLabel = `t${currentInputIndex++}out`;
 
+          // FFmpeg 필터용 특수문자 이스케이프 (중요)
           const textContent = (clip.text || clip.title || "")
-            .replace(/'/g, "\u2019")
-            .replace(/:/g, "\\:");
+            .replace(/\\/g, "\\\\\\\\")
+            .replace(/'/g, "'\\\\\\''")
+            .replace(/:/g, "\\\\:");
+
           const fontSize = Math.round((clip.fontSize || 40) * 2 * scaleRatio);
-          const x = Math.round((clip.x - (clip.width || 800) / 2) * scaleRatio);
-          const y = Math.round(
-            (clip.y - (clip.height || 200) / 2) * scaleRatio,
-          );
-          const fontColor = clip.textColor || "white";
+          const fontColor = (clip.textColor || "#ffffff").replace("#", "0x");
           const opacity = (clip.opacity ?? 100) / 100;
 
-          // 폰트 선택 로직
+          // 좌표 계산: 클라이언트 중앙 좌표 -> 서버 좌상단 좌표
+          const boxW = (clip.width || 800) * scaleRatio;
+          const boxH = (clip.height || 200) * scaleRatio;
+          const startX = Math.round(clip.x * scaleRatio - boxW / 2);
+          const startY = Math.round(clip.y * scaleRatio - boxH / 2);
+
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBold = clip.fontWeight === "bold";
           let fontPath =
@@ -194,12 +197,13 @@ app.post("/render", async (req, res) => {
             fontPath = FONT_PATHS[fontFam].bold;
           }
 
-          // FFmpeg 경로 형식에 맞게 백슬래시 처리 (Windows/Linux 호환)
+          // 경로 백슬래시 이스케이프
           const escapedFontPath = fontPath
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${x}+(w-text_w)/2:y=${y}+(h-text_h)/2:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          // drawtext 필터 조립
+          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${startX}+((${boxW}-text_w)/2):y=${startY}+((${boxH}-text_h)/2):enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
             `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
