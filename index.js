@@ -35,7 +35,6 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// 폰트 매핑
 const FONT_PATHS = {
   NotoSansKR: {
     normal: path.join(__dirname, "assets", "fonts", "NotoSansKR-Medium.ttf"),
@@ -117,14 +116,11 @@ app.post("/render", async (req, res) => {
     let lastVideoLabel = "0:v";
     let filterCounter = 0;
 
-    // [중요 수정] 트랙 번호가 높은 것부터 먼저 렌더링하여 트랙 1이 맨 위에 오도록 내림차순 정렬
-    const sortedTracks = [...tracks].sort((a, b) => {
-      const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
-      const bId = parseInt(String(b.id).replace(/[^0-9]/g, "")) || 0;
-      return bId - aId;
-    });
+    // [근본적 해결] ID 숫자가 아닌, 배열의 인덱스 순서를 기준으로 레이어를 잡습니다.
+    // 트랙 배열의 끝(아래쪽 트랙)부터 시작하여 0번째(맨 위 트랙)까지 역순으로 렌더링합니다.
+    const reversedTracks = [...tracks].reverse();
 
-    sortedTracks.forEach((track) => {
+    reversedTracks.forEach((track) => {
       if (!track || !track.visible || !track.clips) return;
 
       const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
@@ -202,7 +198,6 @@ app.post("/render", async (req, res) => {
           }
 
           if (!fs.existsSync(fontPath)) {
-            console.error(`❌ Font missing at: ${fontPath}`);
             fontPath = FONT_PATHS["NotoSansKR"].normal;
           }
 
