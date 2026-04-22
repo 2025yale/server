@@ -35,6 +35,41 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
+// 폰트 매핑 설정 (서버 기준 경로)
+const FONT_PATHS = {
+  NotoSansKR: {
+    normal: path.join(__dirname, "assets", "fonts", "NotoSansKR-Medium.ttf"),
+    bold: path.join(__dirname, "assets", "fonts", "NotoSansKR-Bold.ttf"),
+  },
+  NanumSquare: {
+    normal: path.join(__dirname, "assets", "fonts", "NanumSquareR.ttf"),
+    bold: path.join(__dirname, "assets", "fonts", "NanumSquareB.ttf"),
+  },
+  BlackHanSans: {
+    normal: path.join(__dirname, "assets", "fonts", "BlackHanSans-Regular.ttf"),
+  },
+  BMJUA: {
+    normal: path.join(__dirname, "assets", "fonts", "BMJUA.ttf"),
+  },
+  MaruMinya: {
+    normal: path.join(__dirname, "assets", "fonts", "MaruMinya.ttf"),
+  },
+  NanumBrush: {
+    normal: path.join(__dirname, "assets", "fonts", "NanumBrush.ttf"),
+  },
+  NanumPen: {
+    normal: path.join(__dirname, "assets", "fonts", "NanumPen.ttf"),
+  },
+  "NanumMyeongjo-YetHangul": {
+    normal: path.join(
+      __dirname,
+      "assets",
+      "fonts",
+      "NanumMyeongjo-YetHangul.ttf",
+    ),
+  },
+};
+
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
@@ -91,10 +126,10 @@ app.post("/render", async (req, res) => {
       if (!track || !track.visible || !track.clips) return;
 
       track.clips.forEach((clip) => {
-        const inputIdx = currentInputIndex++;
-        command.input(clip.url);
-
         if (clip.type === "video" || clip.type === "image") {
+          const inputIdx = currentInputIndex++;
+          command.input(clip.url);
+
           const scaledLabel = `v${inputIdx}scaled`;
           const outputLabel = `v${inputIdx}out`;
 
@@ -120,7 +155,6 @@ app.post("/render", async (req, res) => {
 
           if (clip.type === "video") {
             const aLabel = `a${inputIdx}out`;
-            // adelay는 밀리초(ms) 단위를 사용하므로 초 * 1000 적용
             const delayMs = Math.max(0, Math.round(clip.start * 1000));
             audioFilters.push(
               `[${inputIdx}:a]atrim=0:${clip.duration},adelay=${delayMs}|${delayMs}[${aLabel}]`,
@@ -128,12 +162,49 @@ app.post("/render", async (req, res) => {
             audioLabels.push(`[${aLabel}]`);
           }
         } else if (clip.type === "audio") {
+          const inputIdx = currentInputIndex++;
+          command.input(clip.url);
           const aLabel = `a${inputIdx}out`;
           const delayMs = Math.max(0, Math.round(clip.start * 1000));
           audioFilters.push(
             `[${inputIdx}:a]atrim=0:${clip.duration},adelay=${delayMs}|${delayMs}[${aLabel}]`,
           );
           audioLabels.push(`[${aLabel}]`);
+        } else if (clip.type === "text") {
+          // 텍스트는 별도의 input 없이 drawtext 필터로 처리
+          const outputLabel = `t${currentInputIndex++}out`;
+
+          const textContent = (clip.text || clip.title || "")
+            .replace(/'/g, "\u2019")
+            .replace(/:/g, "\\:");
+          const fontSize = Math.round((clip.fontSize || 40) * 2 * scaleRatio);
+          const x = Math.round((clip.x - (clip.width || 800) / 2) * scaleRatio);
+          const y = Math.round(
+            (clip.y - (clip.height || 200) / 2) * scaleRatio,
+          );
+          const fontColor = clip.textColor || "white";
+          const opacity = (clip.opacity ?? 100) / 100;
+
+          // 폰트 선택 로직
+          const fontFam = clip.fontFamily || "NotoSansKR";
+          const isBold = clip.fontWeight === "bold";
+          let fontPath =
+            FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
+          if (isBold && FONT_PATHS[fontFam]?.bold) {
+            fontPath = FONT_PATHS[fontFam].bold;
+          }
+
+          // FFmpeg 경로 형식에 맞게 백슬래시 처리 (Windows/Linux 호환)
+          const escapedFontPath = fontPath
+            .replace(/\\/g, "/")
+            .replace(/:/g, "\\:");
+
+          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${x}+(w-text_w)/2:y=${y}+(h-text_h)/2:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+
+          videoFilters.push(
+            `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
+          );
+          lastVideoLabel = outputLabel;
         }
       });
     });
@@ -141,7 +212,6 @@ app.post("/render", async (req, res) => {
     let finalFilterComplex = videoFilters.join(";");
 
     if (audioLabels.length > 0) {
-      // amix의 duration=longest와 adelay가 결합되어 정확한 위치에 오디오가 배치됨
       const amixFilter = `${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
       finalFilterComplex +=
         (finalFilterComplex ? ";" : "") +
