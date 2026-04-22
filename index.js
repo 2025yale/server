@@ -101,7 +101,7 @@ app.post("/render", async (req, res) => {
 
     let command = ffmpeg();
 
-    // 배경 블랙 캔버스 (Index 0)
+    // 0번 입력: 배경 블랙 캔버스
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -114,9 +114,9 @@ app.post("/render", async (req, res) => {
     const videoFilters = [];
     const audioFilters = [];
     const audioLabels = [];
-    let currentInputIndex = 1; // 0번은 블랙 배경이므로 1번부터 시작
+    let currentInputIndex = 1;
     let lastVideoLabel = "0:v";
-    let textFilterCount = 0;
+    let filterCounter = 0;
 
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
@@ -127,13 +127,18 @@ app.post("/render", async (req, res) => {
     sortedTracks.forEach((track) => {
       if (!track || !track.visible || !track.clips) return;
 
-      track.clips.forEach((clip) => {
+      // 클립들도 시작 시간 순으로 정렬하여 레이어 순서 보장
+      const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
+
+      sortedClips.forEach((clip) => {
+        filterCounter++;
+
         if (clip.type === "video" || clip.type === "image") {
-          const inputIdx = currentInputIndex++; // 실제 입력 파일이 있을 때만 증가
+          const inputIdx = currentInputIndex++;
           command.input(clip.url);
 
-          const scaledLabel = `v${inputIdx}scaled`;
-          const outputLabel = `v${inputIdx}out`;
+          const scaledLabel = `v${filterCounter}scaled`;
+          const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
@@ -164,7 +169,7 @@ app.post("/render", async (req, res) => {
             audioLabels.push(`[${aLabel}]`);
           }
         } else if (clip.type === "audio") {
-          const inputIdx = currentInputIndex++; // 오디오 파일 입력 시 증가
+          const inputIdx = currentInputIndex++;
           command.input(clip.url);
           const aLabel = `a${inputIdx}out`;
           const delayMs = Math.max(0, Math.round(clip.start * 1000));
@@ -173,8 +178,7 @@ app.post("/render", async (req, res) => {
           );
           audioLabels.push(`[${aLabel}]`);
         } else if (clip.type === "text") {
-          // 텍스트는 파일 입력(command.input)이 없으므로 currentInputIndex를 증가시키지 않음
-          const outputLabel = `text${++textFilterCount}out`;
+          const outputLabel = `t${filterCounter}out`;
 
           const textContent = (clip.text || clip.title || "")
             .replace(/\\/g, "\\\\\\\\")
@@ -196,6 +200,13 @@ app.post("/render", async (req, res) => {
             FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
           if (isBold && FONT_PATHS[fontFam]?.bold) {
             fontPath = FONT_PATHS[fontFam].bold;
+          }
+
+          // 폰트 파일 존재 여부 강제 체크
+          if (!fs.existsSync(fontPath)) {
+            console.error(`❌ Font missing at: ${fontPath}`);
+            // 파일이 없으면 기본 폰트로 대체 시도
+            fontPath = FONT_PATHS["NotoSansKR"].normal;
           }
 
           const escapedFontPath = fontPath
@@ -300,5 +311,5 @@ app.post("/render", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
