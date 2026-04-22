@@ -35,7 +35,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// 폰트 매핑 (서버 절대 경로 사용)
+// 폰트 매핑 (절대 경로 보장)
 const FONT_PATHS = {
   NotoSansKR: {
     normal: path.join(__dirname, "assets", "fonts", "NotoSansKR-Medium.ttf"),
@@ -101,6 +101,7 @@ app.post("/render", async (req, res) => {
 
     let command = ffmpeg();
 
+    // 배경 블랙 캔버스 (Index 0)
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -113,8 +114,9 @@ app.post("/render", async (req, res) => {
     const videoFilters = [];
     const audioFilters = [];
     const audioLabels = [];
-    let currentInputIndex = 1;
+    let currentInputIndex = 1; // 0번은 블랙 배경이므로 1번부터 시작
     let lastVideoLabel = "0:v";
+    let textFilterCount = 0;
 
     const sortedTracks = [...tracks].sort((a, b) => {
       const aId = parseInt(String(a.id).replace(/[^0-9]/g, "")) || 0;
@@ -127,7 +129,7 @@ app.post("/render", async (req, res) => {
 
       track.clips.forEach((clip) => {
         if (clip.type === "video" || clip.type === "image") {
-          const inputIdx = currentInputIndex++;
+          const inputIdx = currentInputIndex++; // 실제 입력 파일이 있을 때만 증가
           command.input(clip.url);
 
           const scaledLabel = `v${inputIdx}scaled`;
@@ -162,7 +164,7 @@ app.post("/render", async (req, res) => {
             audioLabels.push(`[${aLabel}]`);
           }
         } else if (clip.type === "audio") {
-          const inputIdx = currentInputIndex++;
+          const inputIdx = currentInputIndex++; // 오디오 파일 입력 시 증가
           command.input(clip.url);
           const aLabel = `a${inputIdx}out`;
           const delayMs = Math.max(0, Math.round(clip.start * 1000));
@@ -171,9 +173,9 @@ app.post("/render", async (req, res) => {
           );
           audioLabels.push(`[${aLabel}]`);
         } else if (clip.type === "text") {
-          const outputLabel = `t${currentInputIndex++}out`;
+          // 텍스트는 파일 입력(command.input)이 없으므로 currentInputIndex를 증가시키지 않음
+          const outputLabel = `text${++textFilterCount}out`;
 
-          // FFmpeg 필터용 특수문자 이스케이프 (중요)
           const textContent = (clip.text || clip.title || "")
             .replace(/\\/g, "\\\\\\\\")
             .replace(/'/g, "'\\\\\\''")
@@ -183,7 +185,6 @@ app.post("/render", async (req, res) => {
           const fontColor = (clip.textColor || "#ffffff").replace("#", "0x");
           const opacity = (clip.opacity ?? 100) / 100;
 
-          // 좌표 계산: 클라이언트 중앙 좌표 -> 서버 좌상단 좌표
           const boxW = (clip.width || 800) * scaleRatio;
           const boxH = (clip.height || 200) * scaleRatio;
           const startX = Math.round(clip.x * scaleRatio - boxW / 2);
@@ -197,12 +198,10 @@ app.post("/render", async (req, res) => {
             fontPath = FONT_PATHS[fontFam].bold;
           }
 
-          // 경로 백슬래시 이스케이프
           const escapedFontPath = fontPath
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // drawtext 필터 조립
           const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${startX}+((${boxW}-text_w)/2):y=${startY}+((${boxH}-text_h)/2):enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
