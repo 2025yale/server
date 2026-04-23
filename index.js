@@ -148,10 +148,7 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // JavaScript에서 대각선 길이를 직접 계산 (정수로 반올림)
             const diagonal = Math.round(Math.sqrt(w * w + h * h));
-
-            // pad 필터로 캔버스를 먼저 확장한 후 rotate 수행 (가장 안전한 방식)
             const padX = Math.round((diagonal - w) / 2);
             const padY = Math.round((diagonal - h) / 2);
 
@@ -160,7 +157,6 @@ app.post("/render", async (req, res) => {
             );
             transformArr.push(`rotate=${rad}:c=none`);
 
-            // overlay 위치 보정 (확장된 캔버스 크기를 반영)
             finalX = x - padX;
             finalY = y - padY;
           }
@@ -200,6 +196,8 @@ app.post("/render", async (req, res) => {
           );
           audioLabels.push(`[${aLabel}]`);
         } else if (clip.type === "text") {
+          const textCanvasLabel = `t${filterCounter}canvas`;
+          const textRotateLabel = `t${filterCounter}rot`;
           const outputLabel = `t${filterCounter}out`;
 
           const textContent = (clip.text || clip.title || "")
@@ -223,28 +221,48 @@ app.post("/render", async (req, res) => {
           if (isBold && FONT_PATHS[fontFam]?.bold) {
             fontPath = FONT_PATHS[fontFam].bold;
           }
-
           if (!fs.existsSync(fontPath)) {
             fontPath = FONT_PATHS["NotoSansKR"].normal;
           }
-
           const escapedFontPath = fontPath
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          let xPos = `(${startX}+(${Math.round(boxW)}-text_w)/2)`;
-          if (clip.textAlign === "left") xPos = `${startX}`;
-          else if (clip.textAlign === "right")
-            xPos = `(${startX}+${Math.round(boxW)}-text_w)`;
+          let xPos = `(w-text_w)/2`;
+          if (clip.textAlign === "left") xPos = `0`;
+          else if (clip.textAlign === "right") xPos = `(w-text_w)`;
 
           const shadowOpt = clip.shadow
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${Math.round(boxH)}-text_h)/2)${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          // 1. 투명 캔버스에 텍스트 그리기
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
+          videoFilters.push(textBaseFilter);
 
+          // 2. 텍스트 레이어 변형 (회전/반전)
+          let textTransform = `[${textCanvasLabel}]format=yuva420p`;
+          if (clip.scaleX === -1) textTransform += `,hflip`;
+          if (clip.scaleY === -1) textTransform += `,vflip`;
+
+          let finalX = startX;
+          let finalY = startY;
+
+          if (clip.rotation && clip.rotation !== 0) {
+            const rad = (clip.rotation * Math.PI) / 180;
+            const diagonal = Math.round(Math.sqrt(boxW * boxW + boxH * boxH));
+            const padX = Math.round((diagonal - boxW) / 2);
+            const padY = Math.round((diagonal - boxH) / 2);
+
+            textTransform += `,pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0,rotate=${rad}:c=none`;
+            finalX = startX - padX;
+            finalY = startY - padY;
+          }
+          videoFilters.push(`${textTransform}[${textRotateLabel}]`);
+
+          // 3. 최종 오버레이 (시간 동기화 포함)
           videoFilters.push(
-            `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
+            `[${lastVideoLabel}][${textRotateLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
           );
           lastVideoLabel = outputLabel;
         }
