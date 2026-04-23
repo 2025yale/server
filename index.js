@@ -214,21 +214,25 @@ app.post("/render", async (req, res) => {
           const startX = Math.round(clip.x * scaleRatio - boxW / 2);
           const startY = Math.round(clip.y * scaleRatio - boxH / 2);
 
-          // 폰트 선택 로직 강화
+          // 굵기(Bold) 판별 로직 최적화
           const fontFam = clip.fontFamily || "NotoSansKR";
-          const isBold = clip.fontWeight === "bold";
+          // 클라이언트에서 넘어오는 데이터가 "bold" (문자열) 또는 true (불리언) 일 경우를 모두 수용
+          const isBoldRequest =
+            String(clip.fontWeight).toLowerCase() === "bold";
 
           let selectedFontPath;
-          if (isBold && FONT_PATHS[fontFam]?.bold) {
+          if (isBoldRequest && FONT_PATHS[fontFam]?.bold) {
             selectedFontPath = FONT_PATHS[fontFam].bold;
           } else {
             selectedFontPath =
               FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
           }
 
+          // 최종 경로 유효성 검사 (파일이 없으면 무조건 기본 폰트로 대체)
           if (!fs.existsSync(selectedFontPath)) {
             selectedFontPath = FONT_PATHS["NotoSansKR"].normal;
           }
+
           const escapedFontPath = selectedFontPath
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
