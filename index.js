@@ -138,7 +138,6 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // [요소 변형 적용] 뒤집기 및 회전 필터 배열 생성
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -146,7 +145,8 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            transformArr.push(`rotate=${rad}:ow='hypot(iw,ih)':oh='ow':c=none`);
+            // 작은따옴표 중첩 문제를 피하기 위해 수식에서 따옴표를 제거합니다.
+            transformArr.push(`rotate=${rad}:ow=hypot(iw,ih):oh=ow:c=none`);
           }
           const transformStr = transformArr.join(",");
 
@@ -215,18 +215,17 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // [텍스트 스타일 및 정렬 적용]
-          let xPos = `(${startX}+(${boxW}-text_w)/2)`; // default: center
+          let xPos = `(${startX}+(${boxW}-text_w)/2)`;
           if (clip.textAlign === "left") xPos = `${startX}`;
           else if (clip.textAlign === "right")
             xPos = `(${startX}+${boxW}-text_w)`;
 
-          const italicOpt = clip.fontStyle === "italic" ? ":italic=1" : "";
+          // drawtext에 존재하지 않는 italic 옵션을 제거하고 그림자 옵션 구문을 정리합니다.
           const shadowOpt = clip.shadow
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${boxH}-text_h)/2)${italicOpt}${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${boxH}-text_h)/2)${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
             `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
