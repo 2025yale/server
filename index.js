@@ -138,18 +138,18 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // [난이도 중 적용] 변형 필터 구성
-          let transformFilters = [`scale=${w}:${h}`, "format=yuva420p"];
+          // [수정] 변형 필터의 안전한 체이닝
+          let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
-          if (clip.scaleX === -1) transformFilters.push("hflip");
-          if (clip.scaleY === -1) transformFilters.push("vflip");
+          if (clip.scaleX === -1) transformArr.push("hflip");
+          if (clip.scaleY === -1) transformArr.push("vflip");
+
+          // rotate 필터는 ow/oh 계산 시 작은따옴표 이스케이프 주의
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            transformFilters.push(
-              `rotate=${rad}:ow='hypot(iw,ih)':oh=ow:c=none`,
-            );
+            transformArr.push(`rotate=${rad}:ow='hypot(iw,ih)':oh='ow':c=none`);
           }
-          const transformStr = transformFilters.join(",");
+          const transformStr = transformArr.join(",");
 
           let filter =
             clip.type === "image"
@@ -216,18 +216,19 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // [난이도 중 적용] 텍스트 정렬/기울임/그림자 처리
-          let xPos = `${startX}+((${boxW}-text_w)/2)`; // 기본값: center
+          // [수정] 정렬 수식의 괄호와 문법 보정
+          let xPos = `(${startX}+(${boxW}-text_w)/2)`;
           if (clip.textAlign === "left") xPos = `${startX}`;
           else if (clip.textAlign === "right")
-            xPos = `${startX}+(${boxW}-text_w)`;
+            xPos = `(${startX}+${boxW}-text_w)`;
 
           const italicOpt = clip.fontStyle === "italic" ? ":italic=1" : "";
           const shadowOpt = clip.shadow
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=${startY}+((${boxH}-text_h)/2)${italicOpt}${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          // drawtext의 모든 인자는 ':'로 구분되므로 수식 내에 ':'가 들어가지 않도록 주의합니다.
+          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${boxH}-text_h)/2)${italicOpt}${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
             `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
