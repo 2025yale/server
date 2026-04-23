@@ -143,11 +143,22 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
+          let overlayX = x;
+          let overlayY = y;
+
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 회전 시 잘림 방지를 위해 캔버스를 확장합니다. ow, oh 수식에 따옴표를 쓰지 않는 방식을 택합니다.
+            // 회전 필터 적용 (잘림 방지 캔버스 확장)
             transformArr.push(`rotate=${rad}:ow=hypot(iw,ih):oh=ow:c=none`);
+
+            // 자바스크립트에서 보정값 미리 계산하여 수식 오류 방지
+            const diagonal = Math.sqrt(w * w + h * h);
+            const offsetX = (diagonal - w) / 2;
+            const offsetY = (diagonal - h) / 2;
+            overlayX = (x - offsetX).toFixed(2);
+            overlayY = (y - offsetY).toFixed(2);
           }
+
           const transformStr = transformArr.join(",");
 
           let filter =
@@ -160,10 +171,9 @@ app.post("/render", async (req, res) => {
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
 
-          // 회전 시 캔버스가 확장되었으므로 overlay 좌표 계산 시 중심점을 유지하도록 보정합니다.
-          // 확장된 캔버스의 중심과 원본 이미지의 중심 차이를 계산하여 overlay에 반영합니다.
+          // 단순화된 overlay 좌표 전달
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}-(w-iw)/2:y=${y}-(h-ih)/2:eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${overlayX}:y=${overlayY}:eof_action=pass[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
