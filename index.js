@@ -138,13 +138,12 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // [수정] 변형 필터의 안전한 체이닝
+          // [요소 변형 적용] 뒤집기 및 회전 필터 배열 생성
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          // rotate 필터는 ow/oh 계산 시 작은따옴표 이스케이프 주의
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
             transformArr.push(`rotate=${rad}:ow='hypot(iw,ih)':oh='ow':c=none`);
@@ -216,8 +215,8 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // [수정] 정렬 수식의 괄호와 문법 보정
-          let xPos = `(${startX}+(${boxW}-text_w)/2)`;
+          // [텍스트 스타일 및 정렬 적용]
+          let xPos = `(${startX}+(${boxW}-text_w)/2)`; // default: center
           if (clip.textAlign === "left") xPos = `${startX}`;
           else if (clip.textAlign === "right")
             xPos = `(${startX}+${boxW}-text_w)`;
@@ -227,7 +226,6 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // drawtext의 모든 인자는 ':'로 구분되므로 수식 내에 ':'가 들어가지 않도록 주의합니다.
           const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${boxH}-text_h)/2)${italicOpt}${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
