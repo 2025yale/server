@@ -138,7 +138,6 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
-          // [난이도 중 적용] 요소 변형 필터 구성
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -146,8 +145,8 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 에러를 유발하는 ow/oh 수식을 제거하고 표준 rotate 구문 적용
-            transformArr.push(`rotate=${rad}:c=none`);
+            // 회전 시 잘림 방지를 위해 캔버스를 확장합니다. ow, oh 수식에 따옴표를 쓰지 않는 방식을 택합니다.
+            transformArr.push(`rotate=${rad}:ow=hypot(iw,ih):oh=ow:c=none`);
           }
           const transformStr = transformArr.join(",");
 
@@ -160,8 +159,11 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
+
+          // 회전 시 캔버스가 확장되었으므로 overlay 좌표 계산 시 중심점을 유지하도록 보정합니다.
+          // 확장된 캔버스의 중심과 원본 이미지의 중심 차이를 계산하여 overlay에 반영합니다.
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}:y=${y}:eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${x}-(w-iw)/2:y=${y}-(h-ih)/2:eof_action=pass[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -216,7 +218,6 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // [난이도 중 적용] 텍스트 정렬 및 그림자 처리
           let xPos = `(${startX}+(${boxW}-text_w)/2)`;
           if (clip.textAlign === "left") xPos = `${startX}`;
           else if (clip.textAlign === "right")
