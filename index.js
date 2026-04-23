@@ -143,20 +143,20 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          let overlayX = x;
-          let overlayY = y;
+          let finalX = x;
+          let finalY = y;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 회전 필터 적용 (잘림 방지 캔버스 확장)
+            // 캔버스를 대각선 길이만큼 확장하여 잘림 방지
             transformArr.push(`rotate=${rad}:ow=hypot(iw,ih):oh=ow:c=none`);
 
-            // 자바스크립트에서 보정값 미리 계산하여 수식 오류 방지
+            // 캔버스가 확장된 만큼(offsetX, offsetY) overlay 위치를 역으로 보정
             const diagonal = Math.sqrt(w * w + h * h);
             const offsetX = (diagonal - w) / 2;
             const offsetY = (diagonal - h) / 2;
-            overlayX = (x - offsetX).toFixed(2);
-            overlayY = (y - offsetY).toFixed(2);
+            finalX = (x - offsetX).toFixed(2);
+            finalY = (y - offsetY).toFixed(2);
           }
 
           const transformStr = transformArr.join(",");
@@ -170,10 +170,8 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
-
-          // 단순화된 overlay 좌표 전달
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${overlayX}:y=${overlayY}:eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${finalX}:y=${finalY}:eof_action=pass[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
