@@ -214,17 +214,22 @@ app.post("/render", async (req, res) => {
           const startX = Math.round(clip.x * scaleRatio - boxW / 2);
           const startY = Math.round(clip.y * scaleRatio - boxH / 2);
 
+          // 폰트 선택 로직 강화
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBold = clip.fontWeight === "bold";
-          let fontPath =
-            FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
+
+          let selectedFontPath;
           if (isBold && FONT_PATHS[fontFam]?.bold) {
-            fontPath = FONT_PATHS[fontFam].bold;
+            selectedFontPath = FONT_PATHS[fontFam].bold;
+          } else {
+            selectedFontPath =
+              FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
           }
-          if (!fs.existsSync(fontPath)) {
-            fontPath = FONT_PATHS["NotoSansKR"].normal;
+
+          if (!fs.existsSync(selectedFontPath)) {
+            selectedFontPath = FONT_PATHS["NotoSansKR"].normal;
           }
-          const escapedFontPath = fontPath
+          const escapedFontPath = selectedFontPath
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
