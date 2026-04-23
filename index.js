@@ -116,8 +116,6 @@ app.post("/render", async (req, res) => {
     let lastVideoLabel = "0:v";
     let filterCounter = 0;
 
-    // [근본적 해결] ID 숫자가 아닌, 배열의 인덱스 순서를 기준으로 레이어를 잡습니다.
-    // 트랙 배열의 끝(아래쪽 트랙)부터 시작하여 0번째(맨 위 트랙)까지 역순으로 렌더링합니다.
     const reversedTracks = [...tracks].reverse();
 
     reversedTracks.forEach((track) => {
@@ -140,10 +138,23 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
+          // [난이도 중 적용] 변형 필터 구성
+          let transformFilters = [`scale=${w}:${h}`, "format=yuva420p"];
+
+          if (clip.scaleX === -1) transformFilters.push("hflip");
+          if (clip.scaleY === -1) transformFilters.push("vflip");
+          if (clip.rotation && clip.rotation !== 0) {
+            const rad = (clip.rotation * Math.PI) / 180;
+            transformFilters.push(
+              `rotate=${rad}:ow='hypot(iw,ih)':oh=ow:c=none`,
+            );
+          }
+          const transformStr = transformFilters.join(",");
+
           let filter =
             clip.type === "image"
-              ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`
-              : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,scale=${w}:${h},format=yuva420p`;
+              ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
+              : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
@@ -205,7 +216,18 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${startX}+((${boxW}-text_w)/2):y=${startY}+((${boxH}-text_h)/2):enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          // [난이도 중 적용] 텍스트 정렬/기울임/그림자 처리
+          let xPos = `${startX}+((${boxW}-text_w)/2)`; // 기본값: center
+          if (clip.textAlign === "left") xPos = `${startX}`;
+          else if (clip.textAlign === "right")
+            xPos = `${startX}+(${boxW}-text_w)`;
+
+          const italicOpt = clip.fontStyle === "italic" ? ":italic=1" : "";
+          const shadowOpt = clip.shadow
+            ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
+            : "";
+
+          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=${startY}+((${boxH}-text_h)/2)${italicOpt}${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
             `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
