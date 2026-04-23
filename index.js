@@ -148,15 +148,21 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 캔버스를 대각선 길이만큼 확장하여 잘림 방지
-            transformArr.push(`rotate=${rad}:ow=hypot(iw,ih):oh=ow:c=none`);
+            // JavaScript에서 대각선 길이를 직접 계산 (정수로 반올림)
+            const diagonal = Math.round(Math.sqrt(w * w + h * h));
 
-            // 캔버스가 확장된 만큼(offsetX, offsetY) overlay 위치를 역으로 보정
-            const diagonal = Math.sqrt(w * w + h * h);
-            const offsetX = (diagonal - w) / 2;
-            const offsetY = (diagonal - h) / 2;
-            finalX = (x - offsetX).toFixed(2);
-            finalY = (y - offsetY).toFixed(2);
+            // pad 필터로 캔버스를 먼저 확장한 후 rotate 수행 (가장 안전한 방식)
+            const padX = Math.round((diagonal - w) / 2);
+            const padY = Math.round((diagonal - h) / 2);
+
+            transformArr.push(
+              `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
+            );
+            transformArr.push(`rotate=${rad}:c=none`);
+
+            // overlay 위치 보정 (확장된 캔버스 크기를 반영)
+            finalX = x - padX;
+            finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
@@ -171,7 +177,7 @@ app.post("/render", async (req, res) => {
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${finalX}:y=${finalY}:eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -226,16 +232,16 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          let xPos = `(${startX}+(${boxW}-text_w)/2)`;
+          let xPos = `(${startX}+(${Math.round(boxW)}-text_w)/2)`;
           if (clip.textAlign === "left") xPos = `${startX}`;
           else if (clip.textAlign === "right")
-            xPos = `(${startX}+${boxW}-text_w)`;
+            xPos = `(${startX}+${Math.round(boxW)}-text_w)`;
 
           const shadowOpt = clip.shadow
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${boxH}-text_h)/2)${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
+          const drawTextFilter = `drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(${startY}+(${Math.round(boxH)}-text_h)/2)${shadowOpt}:enable='between(t,${clip.start},${clip.start + clip.duration})'`;
 
           videoFilters.push(
             `[${lastVideoLabel}]${drawTextFilter}[${outputLabel}]`,
