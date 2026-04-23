@@ -138,6 +138,7 @@ app.post("/render", async (req, res) => {
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
           const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
+          // [난이도 중 적용] 요소 변형 필터 구성
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -145,8 +146,8 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 작은따옴표 중첩 문제를 피하기 위해 수식에서 따옴표를 제거합니다.
-            transformArr.push(`rotate=${rad}:ow=hypot(iw,ih):oh=ow:c=none`);
+            // 에러를 유발하는 ow/oh 수식을 제거하고 표준 rotate 구문 적용
+            transformArr.push(`rotate=${rad}:c=none`);
           }
           const transformStr = transformArr.join(",");
 
@@ -215,12 +216,12 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
+          // [난이도 중 적용] 텍스트 정렬 및 그림자 처리
           let xPos = `(${startX}+(${boxW}-text_w)/2)`;
           if (clip.textAlign === "left") xPos = `${startX}`;
           else if (clip.textAlign === "right")
             xPos = `(${startX}+${boxW}-text_w)`;
 
-          // drawtext에 존재하지 않는 italic 옵션을 제거하고 그림자 옵션 구문을 정리합니다.
           const shadowOpt = clip.shadow
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
