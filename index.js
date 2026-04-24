@@ -173,7 +173,7 @@ app.post("/render", async (req, res) => {
           }
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -200,7 +200,6 @@ app.post("/render", async (req, res) => {
           const textRotateLabel = `t${filterCounter}rot`;
           const outputLabel = `t${filterCounter}out`;
 
-          // 클라이언트에서 전달받은 wrappedText가 있으면 우선 사용, 없으면 기존 text 사용
           const rawText = clip.wrappedText || clip.text || clip.title || "";
 
           const textContent = rawText
@@ -245,11 +244,17 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // FFmpeg의 drawtext 필터에서 줄바꿈(\n) 처리를 위해 textContent를 그대로 사용
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
+          // 텍스트 투명도를 일관되게 관리하기 위해 fontcolor@opacity 방식 대신 colorchannelmixer를 사용합니다.
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
+
+          // 투명도 적용 로직 추가
+          if (opacity < 1) {
+            textTransform += `,colorchannelmixer=aa=${opacity}`;
+          }
+
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
@@ -269,7 +274,7 @@ app.post("/render", async (req, res) => {
           videoFilters.push(`${textTransform}[${textRotateLabel}]`);
 
           videoFilters.push(
-            `[${lastVideoLabel}][${textRotateLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${textRotateLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:format=auto[${outputLabel}]`,
           );
           lastVideoLabel = outputLabel;
         }
