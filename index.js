@@ -200,7 +200,10 @@ app.post("/render", async (req, res) => {
           const textRotateLabel = `t${filterCounter}rot`;
           const outputLabel = `t${filterCounter}out`;
 
-          const textContent = (clip.text || clip.title || "")
+          // 클라이언트에서 전달받은 wrappedText가 있으면 우선 사용, 없으면 기존 text 사용
+          const rawText = clip.wrappedText || clip.text || clip.title || "";
+
+          const textContent = rawText
             .replace(/\\/g, "\\\\\\\\")
             .replace(/'/g, "'\\\\\\''")
             .replace(/:/g, "\\\\:");
@@ -214,9 +217,7 @@ app.post("/render", async (req, res) => {
           const startX = Math.round(clip.x * scaleRatio - boxW / 2);
           const startY = Math.round(clip.y * scaleRatio - boxH / 2);
 
-          // 굵기(Bold) 판별 로직 최적화
           const fontFam = clip.fontFamily || "NotoSansKR";
-          // 클라이언트에서 넘어오는 데이터가 "bold" (문자열) 또는 true (불리언) 일 경우를 모두 수용
           const isBoldRequest =
             String(clip.fontWeight).toLowerCase() === "bold";
 
@@ -228,7 +229,6 @@ app.post("/render", async (req, res) => {
               FONT_PATHS[fontFam]?.normal || FONT_PATHS["NotoSansKR"].normal;
           }
 
-          // 최종 경로 유효성 검사 (파일이 없으면 무조건 기본 폰트로 대체)
           if (!fs.existsSync(selectedFontPath)) {
             selectedFontPath = FONT_PATHS["NotoSansKR"].normal;
           }
@@ -245,11 +245,10 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // 1. 투명 캔버스에 텍스트 그리기
+          // FFmpeg의 drawtext 필터에서 줄바꿈(\n) 처리를 위해 textContent를 그대로 사용
           const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}@${opacity}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
-          // 2. 텍스트 레이어 변형 (회전/반전)
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
@@ -269,7 +268,6 @@ app.post("/render", async (req, res) => {
           }
           videoFilters.push(`${textTransform}[${textRotateLabel}]`);
 
-          // 3. 최종 오버레이 (시간 동기화 포함)
           videoFilters.push(
             `[${lastVideoLabel}][${textRotateLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
           );
