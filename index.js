@@ -112,14 +112,22 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 텍스트는 clip.realHeight를 사용하고, 이미지/비디오는 clip.height를 사용
-          const targetH = clip.type === "text" ? clip.realHeight : clip.height;
-          const w = Math.round(clip.width * scaleRatio);
+          // 텍스트는 미리 계산된 renderW, renderH 사용
+          const targetW = clip.type === "text" ? clip.renderW : clip.width;
+          const targetH = clip.type === "text" ? clip.renderH : clip.height;
+
+          const w = Math.round(targetW * scaleRatio);
           const h = Math.round(targetH * scaleRatio);
 
-          // x, y 좌표 계산: clip.x, clip.y는 중앙점 기준이므로 절반을 뺌
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round((clip.y - targetH / 2) * scaleRatio);
+          // 텍스트는 미리 계산된 좌상단(renderX, renderY) 사용, 나머지는 계산
+          const x = Math.round(
+            (clip.type === "text" ? clip.renderX : clip.x - clip.width / 2) *
+              scaleRatio,
+          );
+          const y = Math.round(
+            (clip.type === "text" ? clip.renderY : clip.y - clip.height / 2) *
+              scaleRatio,
+          );
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
