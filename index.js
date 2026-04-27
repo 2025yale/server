@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: "100mb" })); // [수정] 이미지 데이터 전송을 위해 용량 제한 확대
+app.use(express.json({ limit: "100mb" })); // 이미지 데이터 전송을 위해 용량 확대
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const io = new Server(server, {
@@ -38,6 +38,10 @@ const timeToSeconds = (timeStr) => {
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
+    if (!tracks || !Array.isArray(tracks)) {
+      return res.status(400).json({ error: "Tracks data is missing" });
+    }
+
     const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -65,7 +69,7 @@ app.post("/render", async (req, res) => {
       .inputOptions("-f lavfi");
     command.inputOptions([
       "-protocol_whitelist",
-      "file,http,https,tcp,tls,crypto,data",
+      "file,http,https,tcp,tls,crypto,pipe",
     ]);
 
     const videoFilters = [];
@@ -80,50 +84,46 @@ app.post("/render", async (req, res) => {
     for (const track of reversedTracks) {
       if (!track || !track.visible || !track.clips) continue;
 
-      for (const clip of track.clips) {
+      const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
+
+      for (const clip of sortedClips) {
         filterCounter++;
 
-        // [수정] 일반 비디오/이미지 혹은 클라이언트에서 변환된 텍스트 이미지 처리
+        // 비디오, 이미지, 또는 텍스트(이미지화 된 것) 처리
         if (
           clip.type === "video" ||
           clip.type === "image" ||
-          clip.type === "text_image"
+          clip.type === "text"
         ) {
           const inputIdx = currentInputIndex++;
+          let currentInputPath = clip.url;
 
-          // dataURL(text_image)인 경우 임시 파일로 저장 후 입력
-          let inputPath = clip.url || clip.textImageUrl;
-          if (
-            clip.type === "text_image" &&
-            inputPath.startsWith("data:image")
-          ) {
-            const base64Data = inputPath.replace(
-              /^data:image\/\w+;base64,/,
+          // 텍스트일 경우 Base64 이미지를 임시 파일로 저장하여 입력으로 사용
+          if (clip.type === "text" && clip.textImage) {
+            const textImgPath = path.join(tempDir, `text_${filterCounter}.png`);
+            const base64Data = clip.textImage.replace(
+              /^data:image\/png;base64,/,
               "",
             );
-            const tempImagePath = path.join(
-              tempDir,
-              `text_${filterCounter}.png`,
-            );
-            fs.writeFileSync(tempImagePath, base64Data, "base64");
-            inputPath = tempImagePath;
+            fs.writeFileSync(textImgPath, base64Data, "base64");
+            currentInputPath = textImgPath;
           }
 
-          command.input(inputPath);
+          command.input(currentInputPath);
 
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 텍스트 이미지일 경우 renderWidth 사용, 일반 이미지일 경우 clip.width 사용
-          const clipW =
-            clip.type === "text_image" ? clip.renderWidth : clip.width;
-          const clipH =
-            clip.type === "text_image" ? clip.renderHeight : clip.height;
-
-          const w = Math.round(clipW * scaleRatio);
-          const h = Math.round(clipH * scaleRatio);
-          const x = Math.round((clip.x - clipW / 2) * scaleRatio);
-          const y = Math.round((clip.y - clipH / 2) * scaleRatio);
+          const w = Math.round(clip.width * scaleRatio);
+          const h = Math.round(
+            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
+          );
+          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+          const y = Math.round(
+            (clip.y -
+              (clip.type === "text" ? clip.realHeight : clip.height) / 2) *
+              scaleRatio,
+          );
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -139,25 +139,27 @@ app.post("/render", async (req, res) => {
             const padY = Math.round((diagonal - h) / 2);
             transformArr.push(
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
-              `rotate=${rad}:c=none`,
             );
+            transformArr.push(`rotate=${rad}:c=none`);
             finalX = x - padX;
             finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
           let filter =
-            clip.type === "image" || clip.type === "text_image"
+            clip.type === "image" || clip.type === "text"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
-          if (clip.opacity < 100)
+          if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
+          }
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:format=auto[${outputLabel}]`,
           );
+
           lastVideoLabel = outputLabel;
 
           if (clip.type === "video") {
@@ -211,6 +213,11 @@ app.post("/render", async (req, res) => {
         })
         .on("end", async () => {
           try {
+            if (
+              !fs.existsSync(outputPath) ||
+              fs.statSync(outputPath).size === 0
+            )
+              throw new Error("Output file is empty");
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.${extension}`;
             const { error: uploadError } = await supabase.storage
@@ -241,6 +248,8 @@ app.post("/render", async (req, res) => {
           "yuv420p",
           "-preset",
           "ultrafast",
+          "-max_muxing_queue_size",
+          "1024",
           "-movflags",
           "faststart",
         ])
