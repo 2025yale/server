@@ -201,7 +201,6 @@ app.post("/render", async (req, res) => {
           const outputLabel = `t${filterCounter}out`;
 
           const rawText = clip.wrappedText || clip.text || clip.title || "";
-
           const textContent = rawText
             .replace(/\\/g, "\\\\\\\\")
             .replace(/'/g, "'\\\\\\''")
@@ -211,13 +210,10 @@ app.post("/render", async (req, res) => {
           const fontColor = (clip.textColor || "#ffffff").replace("#", "0x");
           const opacity = (clip.opacity ?? 100) / 100;
 
-          const boxW = (clip.width || 800) * scaleRatio;
-          const canvasH = height; // 캔버스 높이는 전체 비디오 높이로 유지 (잘림 방지)
-
-          const clientCenterX = clip.x * scaleRatio;
-          const clientCenterY = clip.y * scaleRatio;
-          // 클라이언트에서 넘겨준 텍스트의 실제 높이 적용
-          const realTextHeight = (clip.realHeight || 200) * scaleRatio;
+          const boxW = Math.round((clip.width || 800) * scaleRatio);
+          const realTextHeight = Math.round(
+            (clip.realHeight || 200) * scaleRatio,
+          );
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -239,18 +235,13 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // [해결 방안 1] 가로 정렬 수식 분기 처리
-          let xPos = `(w-text_w)/2`; // center (default)
+          // [해결 1] 정렬 수식 수정: w(캔버스폭)는 이제 boxW와 같습니다.
+          let xPos = `(w-text_w)/2`;
           if (clip.textAlign === "left") xPos = `0`;
-          else if (clip.textAlign === "right") xPos = `(w-text_w)`;
+          else if (clip.textAlign === "right") xPos = `w-text_w`;
 
-          const shadowOpt = clip.shadow
-            ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
-            : "";
-
-          // [해결 방안 2] 세로 정렬: 캔버스 내에서의 y 위치를 상단(0)으로 고정하여 아래로 늘어나게 함
-          // y=(h-text_h)/2 대신 0을 주면, 캔버스 상단부터 글자가 써집니다.
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${canvasH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=0${shadowOpt}[${textCanvasLabel}]`;
+          // [해결 2] 캔버스 생성 시 높이를 realTextHeight로 제한하여 중심점 일치
+          const textBaseFilter = `color=c=black@0:s=${boxW}x${realTextHeight}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-th)/2${clip.shadow ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2" : ""}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
@@ -258,18 +249,17 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
-          // [해결 방안 3] 오버레이 위치 보정
-          // 텍스트 캔버스의 y=0 지점이 클라이언트 텍스트 박스의 상단 지점(center - height/2)과 일치하도록 함
-          let finalX = clientCenterX - boxW / 2;
-          let finalY = clientCenterY - realTextHeight / 2;
+          let finalX = clip.x * scaleRatio - boxW / 2;
+          let finalY = clip.y * scaleRatio - realTextHeight / 2;
 
+          // [해결 3] 회전 시 발생하는 좌표 변위 정밀 보정
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
             const diagonal = Math.round(
-              Math.sqrt(boxW * boxW + canvasH * canvasH),
+              Math.sqrt(boxW * boxW + realTextHeight * realTextHeight),
             );
             const padX = Math.round((diagonal - boxW) / 2);
-            const padY = Math.round((diagonal - canvasH) / 2);
+            const padY = Math.round((diagonal - realTextHeight) / 2);
 
             textTransform += `,pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0,rotate=${rad}:c=none`;
             finalX -= padX;
