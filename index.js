@@ -212,9 +212,12 @@ app.post("/render", async (req, res) => {
           const opacity = (clip.opacity ?? 100) / 100;
 
           const boxW = (clip.width || 800) * scaleRatio;
-          const boxH = (clip.height || 200) * scaleRatio;
-          const startX = Math.round(clip.x * scaleRatio - boxW / 2);
-          const startY = Math.round(clip.y * scaleRatio - boxH / 2);
+          // [해결 방안] 캔버스 높이를 전체 출력 높이(height)로 넉넉하게 설정하여 잘림 방지
+          const canvasH = height;
+
+          // 클라이언트 중앙 좌표 (Konva 기준)
+          const clientCenterX = clip.x * scaleRatio;
+          const clientCenterY = clip.y * scaleRatio;
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -244,7 +247,8 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:line_spacing=5:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
+          // 텍스트 베이스 필터: 캔버스 높이를 canvasH로 크게 잡음
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${canvasH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
@@ -256,18 +260,23 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
-          let finalX = startX;
-          let finalY = startY;
+          // 캔버스 크기가 전체 높이가 되었으므로, overlay 시 좌표는 중앙 기준 보정 필요
+          // 전체 캔버스의 중심이 clientCenterY가 되도록 오버레이 좌표 계산
+          let finalX = clientCenterX - boxW / 2;
+          let finalY = clientCenterY - canvasH / 2;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            const diagonal = Math.round(Math.sqrt(boxW * boxW + boxH * boxH));
+            // 회전 시에도 글자가 잘리지 않도록 대각선 길이를 계산하여 패딩 적용
+            const diagonal = Math.round(
+              Math.sqrt(boxW * boxW + canvasH * canvasH),
+            );
             const padX = Math.round((diagonal - boxW) / 2);
-            const padY = Math.round((diagonal - boxH) / 2);
+            const padY = Math.round((diagonal - canvasH) / 2);
 
             textTransform += `,pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0,rotate=${rad}:c=none`;
-            finalX = startX - padX;
-            finalY = startY - padY;
+            finalX -= padX;
+            finalY -= padY;
           }
           videoFilters.push(`${textTransform}[${textRotateLabel}]`);
 
