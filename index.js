@@ -108,16 +108,16 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
+          // 1. 스케일링된 최종 크기 계산
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(
             (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
           );
 
-          // 중앙 상단(Top-Center) 기준 배치
-          // X: 중앙(clip.x)에서 절반 너비를 뺌 (FFmpeg overlay 기준점 보정)
-          // Y: 상단이므로 clip.y 그대로 사용
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round(clip.y * scaleRatio);
+          // 2. 좌표 변환 (Center -> Top-Left)
+          // 에디터 좌표(clip.x, clip.y)에 비율을 곱한 뒤, 최종 크기의 절반을 뺍니다.
+          const x = Math.round(clip.x * scaleRatio - w / 2);
+          const y = Math.round(clip.y * scaleRatio - h / 2);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
