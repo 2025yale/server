@@ -136,7 +136,6 @@ app.post("/render", async (req, res) => {
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
 
-          // Konva 중심점 기준 좌표 계산
           const x = clip.x * scaleRatio;
           const y = clip.y * scaleRatio;
 
@@ -150,7 +149,6 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 회전 시 캔버스가 잘리지 않도록 ow/oh 설정
             transformArr.push(`rotate=${rad}:c=none:ow='hypot(iw,ih)':oh='ow'`);
             const diagonal = Math.sqrt(w * w + h * h);
             finalX = x - diagonal / 2;
@@ -198,18 +196,22 @@ app.post("/render", async (req, res) => {
 
           const rawText = clip.wrappedText || clip.text || clip.title || "";
 
+          // FFmpeg 필터 세이프 이스케이프 처리 (순서 중요)
           const textContent = rawText
-            .replace(/\\/g, "\\\\\\\\")
-            .replace(/'/g, "'\\\\\\''")
-            .replace(/:/g, "\\\\:");
+            .replace(/\\/g, "\\\\\\\\") // 백슬래시
+            .replace(/'/g, "'\\''") // 싱글 쿼트
+            .replace(/:/g, "\\:") // 콜론
+            .replace(/,/g, "\\,") // 쉼표 (필터 인자 구분자)
+            .replace(/\n/g, "\r"); // 줄바꿈 문자를 FFmpeg가 인식하는 캐리지 리턴으로 변경
 
           const fontSize = Math.round((clip.fontSize || 40) * 2 * scaleRatio);
           const fontColor = (clip.textColor || "#ffffff").replace("#", "0x");
           const opacity = (clip.opacity ?? 100) / 100;
 
-          // 클라이언트에서 넘겨준 renderedHeight를 우선 사용 (잘림 방지 핵심)
-          const boxW = (clip.width || 800) * scaleRatio;
-          const boxH = (clip.renderedHeight || clip.height || 200) * scaleRatio;
+          const boxW = Math.round((clip.width || 800) * scaleRatio);
+          const boxH = Math.round(
+            (clip.renderedHeight || clip.height || 200) * scaleRatio,
+          );
           const x = clip.x * scaleRatio;
           const y = clip.y * scaleRatio;
 
@@ -241,8 +243,8 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // y축 정렬을 (h-text_h)/2 대신 0으로 두어 상단부터 캔버스를 꽉 채우게 함
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x=${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2:line_spacing=0${shadowOpt}[${textCanvasLabel}]`;
+          // drawtext 필터 구성 (y축은 h-text_h/2로 캔버스 내 중앙 배치)
+          const textBaseFilter = `color=c=black@0:s=${boxW}x${boxH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2:line_spacing=0${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
@@ -284,6 +286,10 @@ app.post("/render", async (req, res) => {
         ";" +
         amixFilter;
     }
+
+    // 디버깅을 위해 콘솔에 필터 로그 출력 (문제 발생 시 확인용)
+    console.log("--- FFmpeg Filter Complex ---");
+    console.log(finalFilterComplex);
 
     await new Promise((resolve, reject) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
