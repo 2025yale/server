@@ -117,9 +117,15 @@ app.post("/render", async (req, res) => {
             (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
           );
 
-          // 좌측 상단 기준: clip.x와 clip.y가 좌측 상단 좌표이므로 그대로 스케일링 적용
-          const x = Math.round(clip.x * scaleRatio);
-          const y = Math.round(clip.y * scaleRatio);
+          // 텍스트는 좌측 상단 기준, 그 외(비디오/이미지)는 중앙 기준 유지
+          let x, y;
+          if (clip.type === "text") {
+            x = Math.round(clip.x * scaleRatio);
+            y = Math.round(clip.y * scaleRatio);
+          } else {
+            x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+            y = Math.round((clip.y - clip.height / 2) * scaleRatio);
+          }
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -138,7 +144,6 @@ app.post("/render", async (req, res) => {
             );
             transformArr.push(`rotate=${rad}:c=none`);
 
-            // 회전 보정: 좌측 상단 기준점에서 패딩만큼 이동
             finalX = x - padX;
             finalY = y - padY;
           }
