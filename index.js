@@ -1,3 +1,5 @@
+// index.js (Server Side)
+
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -131,34 +133,33 @@ app.post("/render", async (req, res) => {
           command.input(clip.url);
 
           const scaledLabel = `v${filterCounter}scaled`;
+          const rotateLabel = `v${filterCounter}rot`;
           const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
+
+          // Konva의 중심점 기준 좌표를 좌상단 기준으로 변환
+          const x = clip.x * scaleRatio;
+          const y = clip.y * scaleRatio;
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          let finalX = x;
-          let finalY = y;
+          let finalX = x - w / 2;
+          let finalY = y - h / 2;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            const diagonal = Math.round(Math.sqrt(w * w + h * h));
-            const padX = Math.round((diagonal - w) / 2);
-            const padY = Math.round((diagonal - h) / 2);
+            // 회전 시 캔버스 크기가 커지므로 padding 처리
+            transformArr.push(`rotate=${rad}:c=none:ow='hypot(iw,ih)':oh='ow'`);
 
-            transformArr.push(
-              `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
-            );
-            transformArr.push(`rotate=${rad}:c=none`);
-
-            finalX = x - padX;
-            finalY = y - padY;
+            // rotate 필터 적용 후 중심점 보정 (ow/oh가 hypot로 설정되었으므로)
+            const diagonal = Math.sqrt(w * w + h * h);
+            finalX = x - diagonal / 2;
+            finalY = y - diagonal / 2;
           }
 
           const transformStr = transformArr.join(",");
@@ -171,9 +172,9 @@ app.post("/render", async (req, res) => {
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
-          videoFilters.push(`${filter}[${scaledLabel}]`);
+          videoFilters.push(`${filter}[${rotateLabel}]`);
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
+            `[${lastVideoLabel}][${rotateLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -186,11 +187,21 @@ app.post("/render", async (req, res) => {
             );
             audioLabels.push(`[${aLabel}]`);
           }
+        } else if (clip.type === "audio") {
+          const inputIdx = currentInputIndex++;
+          command.input(clip.url);
+          const aLabel = `a${inputIdx}out`;
+          const delayMs = Math.max(0, Math.round(clip.start * 1000));
+          audioFilters.push(
+            `[${inputIdx}:a]atrim=0:${clip.duration},adelay=${delayMs}|${delayMs}[${aLabel}]`,
+          );
+          audioLabels.push(`[${aLabel}]`);
         } else if (clip.type === "text") {
           const textCanvasLabel = `t${filterCounter}canvas`;
           const textRotateLabel = `t${filterCounter}rot`;
           const outputLabel = `t${filterCounter}out`;
 
+          // wrappedText를 최우선으로 사용하여 줄바꿈 강제 일치
           const rawText = clip.wrappedText || clip.text || clip.title || "";
 
           const textContent = rawText
@@ -203,9 +214,9 @@ app.post("/render", async (req, res) => {
           const opacity = (clip.opacity ?? 100) / 100;
 
           const boxW = (clip.width || 800) * scaleRatio;
-          const boxH = (clip.height || 200) * scaleRatio;
-          const startX = Math.round(clip.x * scaleRatio - boxW / 2);
-          const startY = Math.round(clip.y * scaleRatio - boxH / 2);
+          const boxH = (clip.renderedHeight || clip.height || 200) * scaleRatio;
+          const x = clip.x * scaleRatio;
+          const y = clip.y * scaleRatio;
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -235,7 +246,8 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
+          // 텍스트 베이스 필터 생성
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2:line_spacing=0${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
@@ -247,18 +259,15 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
-          let finalX = startX;
-          let finalY = startY;
+          let finalX = x - boxW / 2;
+          let finalY = y - boxH / 2;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            const diagonal = Math.round(Math.sqrt(boxW * boxW + boxH * boxH));
-            const padX = Math.round((diagonal - boxW) / 2);
-            const padY = Math.round((diagonal - boxH) / 2);
-
-            textTransform += `,pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0,rotate=${rad}:c=none`;
-            finalX = startX - padX;
-            finalY = startY - padY;
+            textTransform += `,rotate=${rad}:c=none:ow='hypot(iw,ih)':oh='ow'`;
+            const diagonal = Math.sqrt(boxW * boxW + boxH * boxH);
+            finalX = x - diagonal / 2;
+            finalY = y - diagonal / 2;
           }
           videoFilters.push(`${textTransform}[${textRotateLabel}]`);
 
