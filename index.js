@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: "100mb" })); // Base64 전송을 위해 제한 상향
+app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const io = new Server(server, {
@@ -38,8 +38,10 @@ const timeToSeconds = (timeStr) => {
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
-    if (!tracks || !Array.isArray(tracks))
+
+    if (!tracks || !Array.isArray(tracks)) {
       return res.status(400).json({ error: "Tracks data is missing" });
+    }
 
     const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
@@ -49,16 +51,17 @@ app.post("/render", async (req, res) => {
     const outputPath = path.join(tempDir, `output.${extension}`);
 
     let maxDuration = 0;
-    tracks.forEach((track) =>
+    tracks.forEach((track) => {
       track.clips.forEach((clip) => {
         maxDuration = Math.max(maxDuration, clip.start + clip.duration);
-      }),
-    );
+      });
+    });
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    const width = settings.width || 405;
-    const height = settings.height || 720;
+    // 디자인 기준 가로 해상도(1080) 대비 현재 출력 해상도의 비율 계산
+    const width = settings.width;
+    const height = settings.height;
     const fps = settings.fps || 24;
     const scaleRatio = width / 1080;
 
@@ -69,7 +72,7 @@ app.post("/render", async (req, res) => {
     command.inputOptions([
       "-protocol_whitelist",
       "file,http,https,tcp,tls,crypto,data",
-    ]); // data 프로토콜 추가
+    ]);
 
     const videoFilters = [];
     const audioFilters = [];
@@ -88,20 +91,19 @@ app.post("/render", async (req, res) => {
       for (const clip of sortedClips) {
         filterCounter++;
 
-        // [수정] video, image 그리고 클라이언트에서 변환된 text_image를 통합 처리
+        // video, image, text_image(클라이언트 변환본) 통합 처리
         if (
           clip.type === "video" ||
           clip.type === "image" ||
           clip.type === "text_image"
         ) {
           const inputIdx = currentInputIndex++;
-
-          // text_image의 경우 Base64 데이터 URL을 그대로 입력으로 사용
           command.input(clip.url);
 
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
+          // [해결] 해상도가 달라져도 텍스트 크기가 유지되도록 scaleRatio 곱셈 적용
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
@@ -119,22 +121,26 @@ app.post("/render", async (req, res) => {
             const diagonal = Math.round(Math.sqrt(w * w + h * h));
             const padX = Math.round((diagonal - w) / 2);
             const padY = Math.round((diagonal - h) / 2);
+
             transformArr.push(
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
-              `rotate=${rad}:c=none`,
             );
+            transformArr.push(`rotate=${rad}:c=none`);
+
             finalX = x - padX;
             finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
+
           let filter =
             clip.type === "image" || clip.type === "text_image"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
-          if (clip.opacity < 100)
+          if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
+          }
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
@@ -165,6 +171,7 @@ app.post("/render", async (req, res) => {
     }
 
     let finalFilterComplex = videoFilters.join(";");
+
     if (audioLabels.length > 0) {
       const amixFilter = `${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
       finalFilterComplex +=
@@ -195,13 +202,14 @@ app.post("/render", async (req, res) => {
           try {
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.${extension}`;
-            await supabase.storage
+            const { error: uploadError } = await supabase.storage
               .from("exports")
               .upload(fileName, fileContent, {
                 contentType:
                   extension === "mp4" ? "video/mp4" : "video/quicktime",
                 upsert: true,
               });
+            if (uploadError) throw uploadError;
             const {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
