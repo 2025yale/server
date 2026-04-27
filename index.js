@@ -212,12 +212,12 @@ app.post("/render", async (req, res) => {
           const opacity = (clip.opacity ?? 100) / 100;
 
           const boxW = (clip.width || 800) * scaleRatio;
-          // [해결 방안] 캔버스 높이를 전체 출력 높이(height)로 넉넉하게 설정하여 잘림 방지
-          const canvasH = height;
+          const canvasH = height; // 캔버스 높이는 전체 비디오 높이로 유지 (잘림 방지)
 
-          // 클라이언트 중앙 좌표 (Konva 기준)
           const clientCenterX = clip.x * scaleRatio;
           const clientCenterY = clip.y * scaleRatio;
+          // 클라이언트에서 넘겨준 텍스트의 실제 높이 적용
+          const realTextHeight = (clip.realHeight || 200) * scaleRatio;
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -239,7 +239,8 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          let xPos = `(w-text_w)/2`;
+          // [해결 방안 1] 가로 정렬 수식 분기 처리
+          let xPos = `(w-text_w)/2`; // center (default)
           if (clip.textAlign === "left") xPos = `0`;
           else if (clip.textAlign === "right") xPos = `(w-text_w)`;
 
@@ -247,27 +248,23 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // 텍스트 베이스 필터: 캔버스 높이를 canvasH로 크게 잡음
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${canvasH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
+          // [해결 방안 2] 세로 정렬: 캔버스 내에서의 y 위치를 상단(0)으로 고정하여 아래로 늘어나게 함
+          // y=(h-text_h)/2 대신 0을 주면, 캔버스 상단부터 글자가 써집니다.
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${canvasH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=0${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
-
-          if (opacity < 1) {
-            textTransform += `,colorchannelmixer=aa=${opacity}`;
-          }
-
+          if (opacity < 1) textTransform += `,colorchannelmixer=aa=${opacity}`;
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
-          // 캔버스 크기가 전체 높이가 되었으므로, overlay 시 좌표는 중앙 기준 보정 필요
-          // 전체 캔버스의 중심이 clientCenterY가 되도록 오버레이 좌표 계산
+          // [해결 방안 3] 오버레이 위치 보정
+          // 텍스트 캔버스의 y=0 지점이 클라이언트 텍스트 박스의 상단 지점(center - height/2)과 일치하도록 함
           let finalX = clientCenterX - boxW / 2;
-          let finalY = clientCenterY - canvasH / 2;
+          let finalY = clientCenterY - realTextHeight / 2;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 회전 시에도 글자가 잘리지 않도록 대각선 길이를 계산하여 패딩 적용
             const diagonal = Math.round(
               Math.sqrt(boxW * boxW + canvasH * canvasH),
             );
@@ -303,10 +300,7 @@ app.post("/render", async (req, res) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
         lastVideoLabel,
       ]);
-
-      if (audioLabels.length > 0) {
-        finalCommand = finalCommand.map("aout");
-      }
+      if (audioLabels.length > 0) finalCommand = finalCommand.map("aout");
 
       finalCommand
         .on("progress", (progress) => {
@@ -327,7 +321,6 @@ app.post("/render", async (req, res) => {
               fs.statSync(outputPath).size === 0
             )
               throw new Error("Output file is empty");
-
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.${extension}`;
             const { error: uploadError } = await supabase.storage
@@ -337,13 +330,10 @@ app.post("/render", async (req, res) => {
                   extension === "mp4" ? "video/mp4" : "video/quicktime",
                 upsert: true,
               });
-
             if (uploadError) throw uploadError;
-
             const {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
-
             if (fs.existsSync(tempDir))
               fs.rmSync(tempDir, { recursive: true, force: true });
             if (socket) socket.emit("render-complete", { url: publicUrl });
