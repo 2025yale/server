@@ -186,15 +186,6 @@ app.post("/render", async (req, res) => {
             );
             audioLabels.push(`[${aLabel}]`);
           }
-        } else if (clip.type === "audio") {
-          const inputIdx = currentInputIndex++;
-          command.input(clip.url);
-          const aLabel = `a${inputIdx}out`;
-          const delayMs = Math.max(0, Math.round(clip.start * 1000));
-          audioFilters.push(
-            `[${inputIdx}:a]atrim=0:${clip.duration},adelay=${delayMs}|${delayMs}[${aLabel}]`,
-          );
-          audioLabels.push(`[${aLabel}]`);
         } else if (clip.type === "text") {
           const textCanvasLabel = `t${filterCounter}canvas`;
           const textRotateLabel = `t${filterCounter}rot`;
@@ -244,13 +235,11 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // 텍스트 투명도를 일관되게 관리하기 위해 fontcolor@opacity 방식 대신 colorchannelmixer를 사용합니다.
           const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
 
-          // 투명도 적용 로직 추가
           if (opacity < 1) {
             textTransform += `,colorchannelmixer=aa=${opacity}`;
           }
