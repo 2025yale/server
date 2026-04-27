@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: "100mb" })); // 이미지 데이터 전송을 위해 용량 확대
+app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const io = new Server(server, {
@@ -89,7 +89,6 @@ app.post("/render", async (req, res) => {
       for (const clip of sortedClips) {
         filterCounter++;
 
-        // 비디오, 이미지, 또는 텍스트(이미지화 된 것) 처리
         if (
           clip.type === "video" ||
           clip.type === "image" ||
@@ -98,7 +97,6 @@ app.post("/render", async (req, res) => {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
-          // 텍스트일 경우 Base64 이미지를 임시 파일로 저장하여 입력으로 사용
           if (clip.type === "text" && clip.textImage) {
             const textImgPath = path.join(tempDir, `text_${filterCounter}.png`);
             const base64Data = clip.textImage.replace(
@@ -114,16 +112,14 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
+          // 텍스트는 clip.realHeight를 사용하고, 이미지/비디오는 clip.height를 사용
+          const targetH = clip.type === "text" ? clip.realHeight : clip.height;
           const w = Math.round(clip.width * scaleRatio);
-          const h = Math.round(
-            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
-          );
+          const h = Math.round(targetH * scaleRatio);
+
+          // x, y 좌표 계산: clip.x, clip.y는 중앙점 기준이므로 절반을 뺌
           const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round(
-            (clip.y -
-              (clip.type === "text" ? clip.realHeight : clip.height) / 2) *
-              scaleRatio,
-          );
+          const y = Math.round((clip.y - targetH / 2) * scaleRatio);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
