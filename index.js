@@ -10,10 +10,9 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 const server = http.createServer(app);
 
-// JSON 한도 상향 (Base64 이미지 데이터 수신용)
 app.use(cors());
-app.use(express.json({ limit: "100mb" }));
-app.use(express.urlencoded({ limit: "100mb", extended: true }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
@@ -73,7 +72,7 @@ app.post("/render", async (req, res) => {
 
     command.inputOptions([
       "-protocol_whitelist",
-      "file,http,https,tcp,tls,crypto,data",
+      "file,http,https,tcp,tls,crypto",
     ]);
 
     const videoFilters = [];
@@ -85,34 +84,57 @@ app.post("/render", async (req, res) => {
 
     const reversedTracks = [...tracks].reverse();
 
-    reversedTracks.forEach((track) => {
-      if (!track || !track.visible || !track.clips) return;
+    for (const track of reversedTracks) {
+      if (!track || !track.visible || !track.clips) continue;
 
       const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
 
-      sortedClips.forEach((clip) => {
+      for (const clip of sortedClips) {
         filterCounter++;
 
-        // 이제 모든 시각적 요소(이미지, 영상, 래스터화된 텍스트)는 여기서 처리됨
-        if (clip.type === "video" || clip.type === "image") {
+        // 텍스트를 이미지로 처리 (Client-side Rendering 방식 적용)
+        if (
+          clip.type === "video" ||
+          clip.type === "image" ||
+          clip.type === "text"
+        ) {
           const inputIdx = currentInputIndex++;
-          command.input(clip.url);
+          let inputSource = clip.url;
+
+          // 텍스트 타입인 경우 base64 이미지를 파일로 임시 저장하여 FFmpeg에 입력
+          if (clip.type === "text" && clip.textImageUrl) {
+            const textImgPath = path.join(tempDir, `text_${clip.id}.png`);
+            const base64Data = clip.textImageUrl.replace(
+              /^data:image\/png;base64,/,
+              "",
+            );
+            fs.writeFileSync(textImgPath, base64Data, "base64");
+            inputSource = textImgPath;
+          }
+
+          command.input(inputSource);
 
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          const w = Math.round(clip.width * scaleRatio);
-          const h = Math.round(clip.height * scaleRatio);
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
+          // 텍스트의 경우 realWidth/realHeight 사용
+          const rawW =
+            clip.type === "text" ? clip.realWidth || clip.width : clip.width;
+          const rawH =
+            clip.type === "text" ? clip.realHeight || clip.height : clip.height;
+
+          const w = Math.round(rawW * scaleRatio);
+          const h = Math.round(rawH * scaleRatio);
+          const x = Math.round(clip.x * scaleRatio);
+          const y = Math.round(clip.y * scaleRatio);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          let finalX = x;
-          let finalY = y;
+          let finalX = x - w / 2; // 중심점 보정
+          let finalY = y - h / 2;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
@@ -125,20 +147,23 @@ app.post("/render", async (req, res) => {
             );
             transformArr.push(`rotate=${rad}:c=none`);
 
-            finalX = x - padX;
-            finalY = y - padY;
+            finalX = finalX - padX;
+            finalY = finalY - padY;
           }
 
           const transformStr = transformArr.join(",");
 
           let filter =
-            clip.type === "image"
+            clip.type === "image" || clip.type === "text"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
-          if (clip.opacity < 100) {
-            filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
+          const opacityValue =
+            (clip.type === "text" ? (clip.opacity ?? 100) : clip.opacity) / 100;
+          if (opacityValue < 1) {
+            filter += `,colorchannelmixer=aa=${opacityValue}`;
           }
+
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
             `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
@@ -164,8 +189,8 @@ app.post("/render", async (req, res) => {
           );
           audioLabels.push(`[${aLabel}]`);
         }
-      });
-    });
+      }
+    }
 
     let finalFilterComplex = videoFilters.join(";");
 
