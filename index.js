@@ -10,9 +10,10 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 const server = http.createServer(app);
 
+// Base64 데이터 전송을 위해 용량 제한 확대
 app.use(cors());
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
@@ -50,6 +51,7 @@ app.post("/render", async (req, res) => {
     const extension = settings.ext || "mp4";
     const outputPath = path.join(tempDir, `output.${extension}`);
 
+    // 전체 지속 시간 계산
     let maxDuration = 0;
     tracks.forEach((track) => {
       track.clips.forEach((clip) => {
@@ -59,13 +61,15 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    const width = settings.width || 405;
-    const height = settings.height || 720;
+    // 출력 해상도 및 스케일 비율 계산 (기준: 1080x1920)
+    const width = settings.width || 720;
+    const height = settings.height || 1280;
     const fps = settings.fps || 24;
-    const scaleRatio = width / 1080;
+    const scaleRatio = height / 1920;
 
     let command = ffmpeg();
 
+    // 배경 블랙 캔버스 생성
     command
       .input(`color=c=black:s=${width}x${height}:d=${finalDuration}`)
       .inputOptions("-f lavfi");
@@ -82,6 +86,7 @@ app.post("/render", async (req, res) => {
     let lastVideoLabel = "0:v";
     let filterCounter = 0;
 
+    // 레이어 순서대로 처리 (역순)
     const reversedTracks = [...tracks].reverse();
 
     for (const track of reversedTracks) {
@@ -92,7 +97,7 @@ app.post("/render", async (req, res) => {
       for (const clip of sortedClips) {
         filterCounter++;
 
-        // 텍스트를 이미지로 처리 (Client-side Rendering 방식 적용)
+        // 비디오, 이미지, 텍스트(이미지화된 것) 처리
         if (
           clip.type === "video" ||
           clip.type === "image" ||
@@ -101,7 +106,7 @@ app.post("/render", async (req, res) => {
           const inputIdx = currentInputIndex++;
           let inputSource = clip.url;
 
-          // 텍스트 타입인 경우 base64 이미지를 파일로 임시 저장하여 FFmpeg에 입력
+          // 텍스트 클립은 전달받은 Base64 데이터를 파일로 저장하여 사용
           if (clip.type === "text" && clip.textImageUrl) {
             const textImgPath = path.join(tempDir, `text_${clip.id}.png`);
             const base64Data = clip.textImageUrl.replace(
@@ -117,25 +122,22 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 텍스트의 경우 realWidth/realHeight 사용
-          const rawW =
-            clip.type === "text" ? clip.realWidth || clip.width : clip.width;
-          const rawH =
-            clip.type === "text" ? clip.realHeight || clip.height : clip.height;
-
-          const w = Math.round(rawW * scaleRatio);
-          const h = Math.round(rawH * scaleRatio);
-          const x = Math.round(clip.x * scaleRatio);
-          const y = Math.round(clip.y * scaleRatio);
+          // 프리뷰 해상도(1080) 대비 현재 출력 해상도 비율 적용
+          const w = Math.round(clip.width * scaleRatio);
+          const h = Math.round(clip.height * scaleRatio);
+          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
+          // 대칭 반전 처리
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          let finalX = x - w / 2; // 중심점 보정
-          let finalY = y - h / 2;
+          let finalX = x;
+          let finalY = y;
 
+          // 회전 처리 (이미지 방식에서도 회전 좌표 보정이 필요함)
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
             const diagonal = Math.round(Math.sqrt(w * w + h * h));
@@ -147,17 +149,19 @@ app.post("/render", async (req, res) => {
             );
             transformArr.push(`rotate=${rad}:c=none`);
 
-            finalX = finalX - padX;
-            finalY = finalY - padY;
+            finalX = x - padX;
+            finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
 
+          // 이미지/텍스트는 루프를 돌려 정지 영상으로 처리
           let filter =
             clip.type === "image" || clip.type === "text"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
+          // 투명도 처리
           const opacityValue =
             (clip.type === "text" ? (clip.opacity ?? 100) : clip.opacity) / 100;
           if (opacityValue < 1) {
@@ -171,6 +175,7 @@ app.post("/render", async (req, res) => {
 
           lastVideoLabel = outputLabel;
 
+          // 비디오 오디오 추출 및 지연 처리
           if (clip.type === "video") {
             const aLabel = `a${inputIdx}out`;
             const delayMs = Math.max(0, Math.round(clip.start * 1000));
@@ -192,6 +197,7 @@ app.post("/render", async (req, res) => {
       }
     }
 
+    // 필터 컴플렉스 구성
     let finalFilterComplex = videoFilters.join(";");
 
     if (audioLabels.length > 0) {
@@ -203,6 +209,7 @@ app.post("/render", async (req, res) => {
         amixFilter;
     }
 
+    // FFmpeg 실행
     await new Promise((resolve, reject) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
         lastVideoLabel,
@@ -228,8 +235,11 @@ app.post("/render", async (req, res) => {
               fs.statSync(outputPath).size === 0
             )
               throw new Error("Output file is empty");
+
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.${extension}`;
+
+            // Supabase 스토리지 업로드
             const { error: uploadError } = await supabase.storage
               .from("exports")
               .upload(fileName, fileContent, {
@@ -237,12 +247,17 @@ app.post("/render", async (req, res) => {
                   extension === "mp4" ? "video/mp4" : "video/quicktime",
                 upsert: true,
               });
+
             if (uploadError) throw uploadError;
+
             const {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
+
+            // 임시 파일 삭제
             if (fs.existsSync(tempDir))
               fs.rmSync(tempDir, { recursive: true, force: true });
+
             if (socket) socket.emit("render-complete", { url: publicUrl });
             resolve();
           } catch (err) {
