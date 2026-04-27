@@ -211,9 +211,8 @@ app.post("/render", async (req, res) => {
           const opacity = (clip.opacity ?? 100) / 100;
 
           const boxW = Math.round((clip.width || 800) * scaleRatio);
-          const realTextHeight = Math.round(
-            (clip.realHeight || 200) * scaleRatio,
-          );
+          // 복구: 텍스트 잘림 방지를 위해 캔버스 높이를 전체 비디오 높이로 충분히 확보합니다.
+          const canvasH = height;
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -235,13 +234,12 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // [해결 1] 정렬 수식 수정: w(캔버스폭)는 이제 boxW와 같습니다.
           let xPos = `(w-text_w)/2`;
           if (clip.textAlign === "left") xPos = `0`;
           else if (clip.textAlign === "right") xPos = `w-text_w`;
 
-          // [해결 2] 캔버스 생성 시 높이를 realTextHeight로 제한하여 중심점 일치
-          const textBaseFilter = `color=c=black@0:s=${boxW}x${realTextHeight}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-th)/2${clip.shadow ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2" : ""}[${textCanvasLabel}]`;
+          // 복구 및 수정: 캔버스 상단(y=0)부터 글자를 작성하여 줄바꿈 시 아래로 늘어날 공간을 확보합니다.
+          const textBaseFilter = `color=c=black@0:s=${boxW}x${canvasH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=0${clip.shadow ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2" : ""}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
@@ -249,17 +247,18 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
+          // 수정: 오버레이 위치를 텍스트 박스의 중앙 좌표에서 절반 높이를 뺀 지점(상단)으로 설정합니다.
+          const realTextHeight = (clip.realHeight || 200) * scaleRatio;
           let finalX = clip.x * scaleRatio - boxW / 2;
           let finalY = clip.y * scaleRatio - realTextHeight / 2;
 
-          // [해결 3] 회전 시 발생하는 좌표 변위 정밀 보정
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
             const diagonal = Math.round(
-              Math.sqrt(boxW * boxW + realTextHeight * realTextHeight),
+              Math.sqrt(boxW * boxW + canvasH * canvasH),
             );
             const padX = Math.round((diagonal - boxW) / 2);
-            const padY = Math.round((diagonal - realTextHeight) / 2);
+            const padY = Math.round((diagonal - canvasH) / 2);
 
             textTransform += `,pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0,rotate=${rad}:c=none`;
             finalX -= padX;
