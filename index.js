@@ -135,24 +135,30 @@ app.post("/render", async (req, res) => {
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
-
-          const x = clip.x * scaleRatio;
-          const y = clip.y * scaleRatio;
+          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
 
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          let finalX = x - w / 2;
-          let finalY = y - h / 2;
+          let finalX = x;
+          let finalY = y;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            transformArr.push(`rotate=${rad}:c=none:ow='hypot(iw,ih)':oh='ow'`);
-            const diagonal = Math.sqrt(w * w + h * h);
-            finalX = x - diagonal / 2;
-            finalY = y - diagonal / 2;
+            const diagonal = Math.round(Math.sqrt(w * w + h * h));
+            const padX = Math.round((diagonal - w) / 2);
+            const padY = Math.round((diagonal - h) / 2);
+
+            transformArr.push(
+              `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
+            );
+            transformArr.push(`rotate=${rad}:c=none`);
+
+            finalX = x - padX;
+            finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
@@ -196,24 +202,19 @@ app.post("/render", async (req, res) => {
 
           const rawText = clip.wrappedText || clip.text || clip.title || "";
 
-          // FFmpeg 필터 세이프 이스케이프 처리 (순서 중요)
           const textContent = rawText
-            .replace(/\\/g, "\\\\\\\\") // 백슬래시
-            .replace(/'/g, "'\\''") // 싱글 쿼트
-            .replace(/:/g, "\\:") // 콜론
-            .replace(/,/g, "\\,") // 쉼표 (필터 인자 구분자)
-            .replace(/\n/g, "\r"); // 줄바꿈 문자를 FFmpeg가 인식하는 캐리지 리턴으로 변경
+            .replace(/\\/g, "\\\\\\\\")
+            .replace(/'/g, "'\\\\\\''")
+            .replace(/:/g, "\\\\:");
 
           const fontSize = Math.round((clip.fontSize || 40) * 2 * scaleRatio);
           const fontColor = (clip.textColor || "#ffffff").replace("#", "0x");
           const opacity = (clip.opacity ?? 100) / 100;
 
-          const boxW = Math.round((clip.width || 800) * scaleRatio);
-          const boxH = Math.round(
-            (clip.renderedHeight || clip.height || 200) * scaleRatio,
-          );
-          const x = clip.x * scaleRatio;
-          const y = clip.y * scaleRatio;
+          const boxW = (clip.width || 800) * scaleRatio;
+          const boxH = (clip.height || 200) * scaleRatio;
+          const startX = Math.round(clip.x * scaleRatio - boxW / 2);
+          const startY = Math.round(clip.y * scaleRatio - boxH / 2);
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -243,8 +244,7 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // drawtext 필터 구성 (y축은 h-text_h/2로 캔버스 내 중앙 배치)
-          const textBaseFilter = `color=c=black@0:s=${boxW}x${boxH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2:line_spacing=0${shadowOpt}[${textCanvasLabel}]`;
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:line_spacing=5:x=${xPos}:y=(h-text_h)/2${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
@@ -256,15 +256,18 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
-          let finalX = x - boxW / 2;
-          let finalY = y - boxH / 2;
+          let finalX = startX;
+          let finalY = startY;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            textTransform += `,rotate=${rad}:c=none:ow='hypot(iw,ih)':oh='ow'`;
-            const diagonal = Math.sqrt(boxW * boxW + boxH * boxH);
-            finalX = x - diagonal / 2;
-            finalY = y - diagonal / 2;
+            const diagonal = Math.round(Math.sqrt(boxW * boxW + boxH * boxH));
+            const padX = Math.round((diagonal - boxW) / 2);
+            const padY = Math.round((diagonal - boxH) / 2);
+
+            textTransform += `,pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0,rotate=${rad}:c=none`;
+            finalX = startX - padX;
+            finalY = startY - padY;
           }
           videoFilters.push(`${textTransform}[${textRotateLabel}]`);
 
@@ -286,10 +289,6 @@ app.post("/render", async (req, res) => {
         ";" +
         amixFilter;
     }
-
-    // 디버깅을 위해 콘솔에 필터 로그 출력 (문제 발생 시 확인용)
-    console.log("--- FFmpeg Filter Complex ---");
-    console.log(finalFilterComplex);
 
     await new Promise((resolve, reject) => {
       let finalCommand = command.complexFilter(finalFilterComplex, [
