@@ -211,8 +211,8 @@ app.post("/render", async (req, res) => {
           const opacity = (clip.opacity ?? 100) / 100;
 
           const boxW = Math.round((clip.width || 800) * scaleRatio);
-          // 잘림 방지 및 정렬 공간 확보를 위해 캔버스 크기를 넉넉하게 설정
-          const boxH = Math.round((clip.realHeight || 200) * scaleRatio * 1.5);
+          // 텍스트 잘림 방지를 위해 도화지 높이를 비디오 전체 높이로 고정
+          const boxH = height;
 
           const fontFam = clip.fontFamily || "NotoSansKR";
           const isBoldRequest =
@@ -234,12 +234,12 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          // 캔버스 내에서의 텍스트 정렬 수식
+          // 캔버스 내 정렬 수식 (boxW라는 고정된 폭 안에서 정렬 수행)
           let xPos = `(w-tw)/2`;
           if (clip.textAlign === "left") xPos = `0`;
           else if (clip.textAlign === "right") xPos = `w-tw`;
 
-          // 수직 중앙 정렬로 그려 잘림 방지
+          // 수직 중앙 정렬로 그려 상하 잘림 공간 확보
           const textBaseFilter = `color=c=black@0:s=${boxW}x${boxH}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-th)/2${clip.shadow ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2" : ""}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
@@ -248,7 +248,7 @@ app.post("/render", async (req, res) => {
           if (clip.scaleX === -1) textTransform += `,hflip`;
           if (clip.scaleY === -1) textTransform += `,vflip`;
 
-          // 회전 보정 및 오버레이 좌표 계산
+          // 오버레이 좌표 계산: 도화지 중심이 clip.x, clip.y와 일치하도록 설정
           let finalX = clip.x * scaleRatio - boxW / 2;
           let finalY = clip.y * scaleRatio - boxH / 2;
 
