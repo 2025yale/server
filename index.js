@@ -38,9 +38,8 @@ const timeToSeconds = (timeStr) => {
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
-    if (!tracks || !Array.isArray(tracks)) {
+    if (!tracks || !Array.isArray(tracks))
       return res.status(400).json({ error: "Tracks data is missing" });
-    }
 
     const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
@@ -83,12 +82,10 @@ app.post("/render", async (req, res) => {
 
     for (const track of reversedTracks) {
       if (!track || !track.visible || !track.clips) continue;
-
       const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
 
       for (const clip of sortedClips) {
         filterCounter++;
-
         if (
           clip.type === "video" ||
           clip.type === "image" ||
@@ -108,7 +105,6 @@ app.post("/render", async (req, res) => {
           }
 
           command.input(currentInputPath);
-
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
@@ -117,15 +113,11 @@ app.post("/render", async (req, res) => {
             (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
           );
 
-          // 텍스트는 좌측 상단 기준, 그 외(비디오/이미지)는 중앙 기준 유지
-          let x, y;
-          if (clip.type === "text") {
-            x = Math.round(clip.x * scaleRatio);
-            y = Math.round(clip.y * scaleRatio);
-          } else {
-            x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-            y = Math.round((clip.y - clip.height / 2) * scaleRatio);
-          }
+          // 중앙 상단(Top-Center) 기준 배치
+          // X: 중앙(clip.x)에서 절반 너비를 뺌 (FFmpeg overlay 기준점 보정)
+          // Y: 상단이므로 clip.y 그대로 사용
+          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
+          const y = Math.round(clip.y * scaleRatio);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -143,7 +135,6 @@ app.post("/render", async (req, res) => {
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
             );
             transformArr.push(`rotate=${rad}:c=none`);
-
             finalX = x - padX;
             finalY = y - padY;
           }
@@ -154,9 +145,8 @@ app.post("/render", async (req, res) => {
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
-          if (clip.opacity < 100) {
+          if (clip.opacity < 100)
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
-          }
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
@@ -211,7 +201,6 @@ app.post("/render", async (req, res) => {
           }
         })
         .on("error", (err) => {
-          console.error("FFmpeg Error:", err);
           reject(err);
         })
         .on("end", async () => {
@@ -261,7 +250,6 @@ app.post("/render", async (req, res) => {
 
     if (!res.headersSent) res.json({ success: true });
   } catch (error) {
-    console.error("Render error:", error);
     if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
