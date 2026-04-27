@@ -1,5 +1,3 @@
-// index.js (Server Side)
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -133,13 +131,12 @@ app.post("/render", async (req, res) => {
           command.input(clip.url);
 
           const scaledLabel = `v${filterCounter}scaled`;
-          const rotateLabel = `v${filterCounter}rot`;
           const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(clip.height * scaleRatio);
 
-          // Konva의 중심점 기준 좌표를 좌상단 기준으로 변환
+          // Konva 중심점 기준 좌표 계산
           const x = clip.x * scaleRatio;
           const y = clip.y * scaleRatio;
 
@@ -153,10 +150,8 @@ app.post("/render", async (req, res) => {
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            // 회전 시 캔버스 크기가 커지므로 padding 처리
+            // 회전 시 캔버스가 잘리지 않도록 ow/oh 설정
             transformArr.push(`rotate=${rad}:c=none:ow='hypot(iw,ih)':oh='ow'`);
-
-            // rotate 필터 적용 후 중심점 보정 (ow/oh가 hypot로 설정되었으므로)
             const diagonal = Math.sqrt(w * w + h * h);
             finalX = x - diagonal / 2;
             finalY = y - diagonal / 2;
@@ -172,9 +167,9 @@ app.post("/render", async (req, res) => {
           if (clip.opacity < 100) {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
           }
-          videoFilters.push(`${filter}[${rotateLabel}]`);
+          videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
-            `[${lastVideoLabel}][${rotateLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -201,7 +196,6 @@ app.post("/render", async (req, res) => {
           const textRotateLabel = `t${filterCounter}rot`;
           const outputLabel = `t${filterCounter}out`;
 
-          // wrappedText를 최우선으로 사용하여 줄바꿈 강제 일치
           const rawText = clip.wrappedText || clip.text || clip.title || "";
 
           const textContent = rawText
@@ -213,6 +207,7 @@ app.post("/render", async (req, res) => {
           const fontColor = (clip.textColor || "#ffffff").replace("#", "0x");
           const opacity = (clip.opacity ?? 100) / 100;
 
+          // 클라이언트에서 넘겨준 renderedHeight를 우선 사용 (잘림 방지 핵심)
           const boxW = (clip.width || 800) * scaleRatio;
           const boxH = (clip.renderedHeight || clip.height || 200) * scaleRatio;
           const x = clip.x * scaleRatio;
@@ -246,8 +241,8 @@ app.post("/render", async (req, res) => {
             ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2"
             : "";
 
-          // 텍스트 베이스 필터 생성
-          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2:line_spacing=0${shadowOpt}[${textCanvasLabel}]`;
+          // y축 정렬을 (h-text_h)/2 대신 0으로 두어 상단부터 캔버스를 꽉 채우게 함
+          const textBaseFilter = `color=c=black@0:s=${Math.round(boxW)}x=${Math.round(boxH)}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-text_h)/2:line_spacing=0${shadowOpt}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
