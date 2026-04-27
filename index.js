@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: "100mb" }));
+app.use(express.json({ limit: "100mb" })); // [수정] 이미지 데이터 전송을 위해 용량 제한 확대
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const io = new Server(server, {
@@ -38,11 +38,6 @@ const timeToSeconds = (timeStr) => {
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
-
-    if (!tracks || !Array.isArray(tracks)) {
-      return res.status(400).json({ error: "Tracks data is missing" });
-    }
-
     const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -59,9 +54,8 @@ app.post("/render", async (req, res) => {
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
-    // 디자인 기준 가로 해상도(1080) 대비 현재 출력 해상도의 비율 계산
-    const width = settings.width;
-    const height = settings.height;
+    const width = settings.width || 405;
+    const height = settings.height || 720;
     const fps = settings.fps || 24;
     const scaleRatio = width / 1080;
 
@@ -86,28 +80,50 @@ app.post("/render", async (req, res) => {
     for (const track of reversedTracks) {
       if (!track || !track.visible || !track.clips) continue;
 
-      const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
-
-      for (const clip of sortedClips) {
+      for (const clip of track.clips) {
         filterCounter++;
 
-        // video, image, text_image(클라이언트 변환본) 통합 처리
+        // [수정] 일반 비디오/이미지 혹은 클라이언트에서 변환된 텍스트 이미지 처리
         if (
           clip.type === "video" ||
           clip.type === "image" ||
           clip.type === "text_image"
         ) {
           const inputIdx = currentInputIndex++;
-          command.input(clip.url);
+
+          // dataURL(text_image)인 경우 임시 파일로 저장 후 입력
+          let inputPath = clip.url || clip.textImageUrl;
+          if (
+            clip.type === "text_image" &&
+            inputPath.startsWith("data:image")
+          ) {
+            const base64Data = inputPath.replace(
+              /^data:image\/\w+;base64,/,
+              "",
+            );
+            const tempImagePath = path.join(
+              tempDir,
+              `text_${filterCounter}.png`,
+            );
+            fs.writeFileSync(tempImagePath, base64Data, "base64");
+            inputPath = tempImagePath;
+          }
+
+          command.input(inputPath);
 
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // [해결] 해상도가 달라져도 텍스트 크기가 유지되도록 scaleRatio 곱셈 적용
-          const w = Math.round(clip.width * scaleRatio);
-          const h = Math.round(clip.height * scaleRatio);
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round((clip.y - clip.height / 2) * scaleRatio);
+          // 텍스트 이미지일 경우 renderWidth 사용, 일반 이미지일 경우 clip.width 사용
+          const clipW =
+            clip.type === "text_image" ? clip.renderWidth : clip.width;
+          const clipH =
+            clip.type === "text_image" ? clip.renderHeight : clip.height;
+
+          const w = Math.round(clipW * scaleRatio);
+          const h = Math.round(clipH * scaleRatio);
+          const x = Math.round((clip.x - clipW / 2) * scaleRatio);
+          const y = Math.round((clip.y - clipH / 2) * scaleRatio);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
           if (clip.scaleX === -1) transformArr.push("hflip");
@@ -121,32 +137,27 @@ app.post("/render", async (req, res) => {
             const diagonal = Math.round(Math.sqrt(w * w + h * h));
             const padX = Math.round((diagonal - w) / 2);
             const padY = Math.round((diagonal - h) / 2);
-
             transformArr.push(
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
+              `rotate=${rad}:c=none`,
             );
-            transformArr.push(`rotate=${rad}:c=none`);
-
             finalX = x - padX;
             finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
-
           let filter =
             clip.type === "image" || clip.type === "text_image"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
-          if (clip.opacity < 100) {
+          if (clip.opacity < 100)
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
-          }
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:format=auto[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:eof_action=pass:format=auto[${outputLabel}]`,
           );
-
           lastVideoLabel = outputLabel;
 
           if (clip.type === "video") {
@@ -171,7 +182,6 @@ app.post("/render", async (req, res) => {
     }
 
     let finalFilterComplex = videoFilters.join(";");
-
     if (audioLabels.length > 0) {
       const amixFilter = `${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
       finalFilterComplex +=
@@ -196,6 +206,7 @@ app.post("/render", async (req, res) => {
           }
         })
         .on("error", (err) => {
+          console.error("FFmpeg Error:", err);
           reject(err);
         })
         .on("end", async () => {
