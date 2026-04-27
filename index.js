@@ -1,4 +1,3 @@
-// index.js 전체 출력
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -212,7 +211,6 @@ app.post("/render", async (req, res) => {
           const opacity = (clip.opacity ?? 100) / 100;
 
           const boxW = Math.round((clip.width || 800) * scaleRatio);
-          // 클라이언트에서 전달받은 정확한 렌더링 높이 사용
           const realTextHeight = Math.round(
             (clip.realHeight || 200) * scaleRatio,
           );
@@ -237,12 +235,14 @@ app.post("/render", async (req, res) => {
             .replace(/\\/g, "/")
             .replace(/:/g, "\\:");
 
-          let xPos = `(w-text_w)/2`;
-          if (clip.textAlign === "left") xPos = `0`;
-          else if (clip.textAlign === "right") xPos = `w-text_w`;
+          // [수정] 텍스트 내부 정렬 수식을 클라이언트의 textAlign 옵션에 따라 명확히 처리
+          let xAlign;
+          if (clip.textAlign === "left") xAlign = "0";
+          else if (clip.textAlign === "right") xAlign = "w-tw";
+          else xAlign = "(w-tw)/2";
 
-          // 캔버스 크기를 realTextHeight에 딱 맞춤으로써 텍스트 베이스라인 오차 제거
-          const textBaseFilter = `color=c=black@0:s=${boxW}x${realTextHeight}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xPos}:y=(h-th)/2${clip.shadow ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2" : ""}[${textCanvasLabel}]`;
+          // [수정] y 좌표 수식을 보정하여 텍스트 뭉치가 캔버스 중앙에 오도록 함 (의도보다 높게 나오는 문제 해결)
+          const textBaseFilter = `color=c=black@0:s=${boxW}x${realTextHeight}:d=${clip.duration},drawtext=fontfile='${escapedFontPath}':text='${textContent}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${xAlign}:y=(h-th)/2:line_spacing=5${clip.shadow ? ":shadowcolor=black@0.4:shadowx=2:shadowy=2" : ""}[${textCanvasLabel}]`;
           videoFilters.push(textBaseFilter);
 
           let textTransform = `[${textCanvasLabel}]format=yuva420p`;
