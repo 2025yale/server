@@ -11,8 +11,8 @@ const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: "100mb" }));
-app.use(express.urlencoded({ limit: "100mb", extended: true }));
+app.use(express.json({ limit: "200mb" }));
+app.use(express.urlencoded({ limit: "200mb", extended: true }));
 
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
@@ -39,7 +39,7 @@ app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
     if (!tracks || !Array.isArray(tracks))
-      return res.status(400).json({ error: "Tracks data is missing" });
+      return res.status(400).json({ error: "Tracks missing" });
 
     const socket = io.sockets.sockets.get(socketId);
     const tempDir = path.join(__dirname, "temp", projectId);
@@ -49,11 +49,11 @@ app.post("/render", async (req, res) => {
     const outputPath = path.join(tempDir, `output.${extension}`);
 
     let maxDuration = 0;
-    tracks.forEach((track) => {
-      track.clips.forEach((clip) => {
-        maxDuration = Math.max(maxDuration, clip.start + clip.duration);
-      });
-    });
+    tracks.forEach((t) =>
+      t.clips.forEach(
+        (c) => (maxDuration = Math.max(maxDuration, c.start + c.duration)),
+      ),
+    );
     const finalDuration =
       maxDuration > 0 ? maxDuration : settings.totalDuration || 5;
 
@@ -81,16 +81,10 @@ app.post("/render", async (req, res) => {
     const reversedTracks = [...tracks].reverse();
 
     for (const track of reversedTracks) {
-      if (!track || !track.visible || !track.clips) continue;
-      const sortedClips = [...track.clips].sort((a, b) => a.start - b.start);
-
-      for (const clip of sortedClips) {
+      if (!track || !track.visible) continue;
+      for (const clip of track.clips) {
         filterCounter++;
-        if (
-          clip.type === "video" ||
-          clip.type === "image" ||
-          clip.type === "text"
-        ) {
+        if (["video", "image", "text"].includes(clip.type)) {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
@@ -109,39 +103,49 @@ app.post("/render", async (req, res) => {
           const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
-          const h = Math.round(
-            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
-          );
+          let h, finalX, finalY, targetW, targetH;
 
-          // 중앙 상단(Top-Center) 기준 배치
-          // X: 중앙(clip.x)에서 절반 너비를 뺌 (FFmpeg overlay 기준점 보정)
-          // Y: 상단이므로 clip.y 그대로 사용
-          const x = Math.round((clip.x - clip.width / 2) * scaleRatio);
-          const y = Math.round(clip.y * scaleRatio);
+          if (clip.type === "text") {
+            // [텍스트] 상단 중앙 기준 + 그림자 패딩 보정
+            h = Math.round(clip.realHeight * scaleRatio);
+            const p = (clip.textPadding || 0) * scaleRatio;
+            targetW = w + p * 2;
+            targetH = h + p * 2;
 
-          let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
+            finalX = clip.x * scaleRatio - w / 2 - p;
+            finalY = clip.y * scaleRatio - p; // 상단 기준이므로 h/2 안 뺌
+          } else {
+            // [영상/이미지] 중앙 기준
+            h = Math.round(clip.height * scaleRatio);
+            targetW = w;
+            targetH = h;
+            finalX = clip.x * scaleRatio - w / 2;
+            finalY = clip.y * scaleRatio - h / 2;
+          }
+
+          let transformArr = [
+            `scale=${Math.round(targetW)}:${Math.round(targetH)}`,
+            "format=yuva420p",
+          ];
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
-          let finalX = x;
-          let finalY = y;
-
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
-            const diagonal = Math.round(Math.sqrt(w * w + h * h));
-            const padX = Math.round((diagonal - w) / 2);
-            const padY = Math.round((diagonal - h) / 2);
+            const diagonal = Math.round(Math.sqrt(targetW ** 2 + targetH ** 2));
+            const padX = Math.round((diagonal - targetW) / 2);
+            const padY = Math.round((diagonal - targetH) / 2);
             transformArr.push(
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
+              `rotate=${rad}:c=none`,
             );
-            transformArr.push(`rotate=${rad}:c=none`);
-            finalX = x - padX;
-            finalY = y - padY;
+            finalX -= padX;
+            finalY -= padY;
           }
 
           const transformStr = transformArr.join(",");
           let filter =
-            clip.type === "image" || clip.type === "text"
+            clip.type !== "video"
               ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
               : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
@@ -152,7 +156,6 @@ app.post("/render", async (req, res) => {
           videoFilters.push(
             `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:format=auto[${outputLabel}]`,
           );
-
           lastVideoLabel = outputLabel;
 
           if (clip.type === "video") {
@@ -178,12 +181,10 @@ app.post("/render", async (req, res) => {
 
     let finalFilterComplex = videoFilters.join(";");
     if (audioLabels.length > 0) {
-      const amixFilter = `${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
       finalFilterComplex +=
         (finalFilterComplex ? ";" : "") +
         audioFilters.join(";") +
-        ";" +
-        amixFilter;
+        `;${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest[aout]`;
     }
 
     await new Promise((resolve, reject) => {
@@ -193,39 +194,32 @@ app.post("/render", async (req, res) => {
       if (audioLabels.length > 0) finalCommand = finalCommand.map("aout");
 
       finalCommand
-        .on("progress", (progress) => {
-          if (socket) {
-            const currentTime = timeToSeconds(progress.timemark);
-            const percent = (currentTime / finalDuration) * 100;
-            socket.emit("render-progress", { percent: Math.min(99, percent) });
-          }
-        })
-        .on("error", (err) => {
-          reject(err);
-        })
+        .on("progress", (p) =>
+          socket?.emit("render-progress", {
+            percent: Math.min(
+              99,
+              (timeToSeconds(p.timemark) / finalDuration) * 100,
+            ),
+          }),
+        )
+        .on("error", reject)
         .on("end", async () => {
           try {
-            if (
-              !fs.existsSync(outputPath) ||
-              fs.statSync(outputPath).size === 0
-            )
-              throw new Error("Output file is empty");
             const fileContent = fs.readFileSync(outputPath);
             const fileName = `render_${projectId}_${Date.now()}.${extension}`;
-            const { error: uploadError } = await supabase.storage
+            await supabase.storage
               .from("exports")
               .upload(fileName, fileContent, {
                 contentType:
                   extension === "mp4" ? "video/mp4" : "video/quicktime",
                 upsert: true,
               });
-            if (uploadError) throw uploadError;
             const {
               data: { publicUrl },
             } = supabase.storage.from("exports").getPublicUrl(fileName);
             if (fs.existsSync(tempDir))
               fs.rmSync(tempDir, { recursive: true, force: true });
-            if (socket) socket.emit("render-complete", { url: publicUrl });
+            socket?.emit("render-complete", { url: publicUrl });
             resolve();
           } catch (err) {
             reject(err);
@@ -240,8 +234,6 @@ app.post("/render", async (req, res) => {
           "yuv420p",
           "-preset",
           "ultrafast",
-          "-max_muxing_queue_size",
-          "1024",
           "-movflags",
           "faststart",
         ])
