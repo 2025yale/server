@@ -86,7 +86,11 @@ app.post("/render", async (req, res) => {
 
       for (const clip of sortedClips) {
         filterCounter++;
-        if (["video", "image", "text"].includes(clip.type)) {
+        if (
+          clip.type === "video" ||
+          clip.type === "image" ||
+          clip.type === "text"
+        ) {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
@@ -104,19 +108,27 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 실제 이미지 크기 스케일링
-          const w = Math.round(clip.realWidth * scaleRatio);
-          const h = Math.round(clip.realHeight * scaleRatio);
+          // 1. 실제 캔버스(여백 포함) 크기 계산
+          const textPadding = (clip.textPadding || 0) * scaleRatio;
+          const w =
+            Math.round(clip.width * scaleRatio) +
+            (clip.type === "text" ? textPadding * 2 : 0);
+          const h = Math.round(
+            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
+          );
 
-          // Center 기준 좌표 -> Top-Left 기준 좌표 변환
-          // 클라이언트의 x, y가 중앙점이므로 이미지 절반만큼 빼줌
-          let finalX = clip.x * scaleRatio - w / 2;
-          let finalY = clip.y * scaleRatio - h / 2;
+          // 2. 좌표 변환 (Center -> Top-Left)
+          // 클라이언트의 clip.x는 텍스트 본체의 중앙이므로, 여백이 포함된 이미지 전체의 중앙을 맞추려면
+          // 여백이 포함된 전체 너비(w)의 절반을 빼야 합니다.
+          const x = Math.round(clip.x * scaleRatio - w / 2);
+          const y = Math.round(clip.y * scaleRatio - h / 2);
 
           let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
-
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
+
+          let finalX = x;
+          let finalY = y;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
@@ -127,21 +139,21 @@ app.post("/render", async (req, res) => {
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
             );
             transformArr.push(`rotate=${rad}:c=none`);
-            finalX -= padX;
-            finalY -= padY;
+            finalX = x - padX;
+            finalY = y - padY;
           }
 
           const transformStr = transformArr.join(",");
           let filter =
-            clip.type === "video"
-              ? `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
-              : `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
+            clip.type === "image" || clip.type === "text"
+              ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
+              : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
           if (clip.opacity < 100)
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
-          // 그림자 보존을 위해 format=auto를 빼고 overlay 처리
+          // 그림자 유지를 위해 format=auto 제거
           videoFilters.push(
             `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
           );
@@ -193,7 +205,9 @@ app.post("/render", async (req, res) => {
             socket.emit("render-progress", { percent: Math.min(99, percent) });
           }
         })
-        .on("error", (err) => reject(err))
+        .on("error", (err) => {
+          reject(err);
+        })
         .on("end", async () => {
           try {
             if (
