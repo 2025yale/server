@@ -102,25 +102,24 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
+          // 모든 요소는 중앙 기준(Center)으로 계산
           const w = Math.round(clip.width * scaleRatio);
-          let h, finalX, finalY, targetW, targetH;
+          const h = Math.round(
+            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
+          );
 
+          let targetW = w;
+          let targetH = h;
+          let finalX = clip.x * scaleRatio - w / 2;
+          let finalY = clip.y * scaleRatio - h / 2;
+
+          // 텍스트일 경우 이미지에 포함된 패딩만큼 보정
           if (clip.type === "text") {
-            // [텍스트] 상단 중앙 기준 + 그림자 패딩 보정
-            h = Math.round(clip.realHeight * scaleRatio);
             const p = (clip.textPadding || 0) * scaleRatio;
             targetW = w + p * 2;
             targetH = h + p * 2;
-
-            finalX = clip.x * scaleRatio - w / 2 - p;
-            finalY = clip.y * scaleRatio - p; // 상단 기준이므로 h/2 안 뺌
-          } else {
-            // [영상/이미지] 중앙 기준
-            h = Math.round(clip.height * scaleRatio);
-            targetW = w;
-            targetH = h;
-            finalX = clip.x * scaleRatio - w / 2;
-            finalY = clip.y * scaleRatio - h / 2;
+            finalX -= p;
+            finalY -= p;
           }
 
           let transformArr = [
