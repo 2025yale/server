@@ -6,13 +6,11 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
-const axios = require("axios");
-const cheerio = require("cheerio");
+const puppeteer = require("puppeteer"); // axios, cheerio 대체
 
 const app = express();
 const server = http.createServer(app);
 
-// 1. CORS 설정을 최상단으로 이동 및 명시적 선언
 app.use(
   cors({
     origin: "*",
@@ -21,7 +19,6 @@ app.use(
   }),
 );
 
-// 2. 모든 OPTIONS 요청에 대해 200 OK 응답 처리 (CORS 프리플라이트 해결)
 app.options("*", cors());
 
 app.use(express.json({ limit: "200mb" }));
@@ -48,42 +45,73 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// URL 콘텐츠 추출 엔드포인트
+// URL 콘텐츠 추출 엔드포인트 (Puppeteer 적용)
 app.post("/extract-content", async (req, res) => {
+  let browser;
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "URL이 누락되었습니다." });
 
-    const { data: html } = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-      timeout: 5000,
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
-    const $ = cheerio.load(html);
-    const title = $("h1, h2, .title, #title, .title_subject")
-      .first()
-      .text()
-      .trim();
-    const content = $(
-      "article, .content, .post-content, #article_content, .write_div, .rd_body",
-    )
-      .first()
-      .text()
-      .replace(/\s+/g, " ")
-      .trim();
+    const page = await browser.newPage();
+    // 실제 사용자처럼 보이도록 User-Agent 설정
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    );
+
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+
+    const data = await page.evaluate(() => {
+      // 커뮤니티별 주요 셀렉터들을 우선순위대로 탐색
+      const titleSelectors = [
+        "h1.title",
+        "h1",
+        "h2",
+        ".title",
+        ".subject",
+        ".title_subject",
+        ".article_title",
+      ];
+      const contentSelectors = [
+        "article",
+        ".content",
+        ".post-content",
+        ".write_div",
+        ".rd_body",
+        "#article_content",
+        ".view_content",
+      ];
+
+      const findText = (selectors) => {
+        for (const s of selectors) {
+          const el = document.querySelector(s);
+          if (el && el.innerText.trim().length > 0) return el.innerText.trim();
+        }
+        return "";
+      };
+
+      return {
+        title: findText(titleSelectors),
+        content: findText(contentSelectors),
+      };
+    });
+
+    await browser.close();
 
     res.json({
       success: true,
       data: {
-        title: title || "제목을 찾을 수 없음",
-        content: content || "본문 내용을 찾을 수 없음",
+        title: data.title || "제목을 찾을 수 없음",
+        content: data.content || "본문 내용을 찾을 수 없음",
         url: url,
       },
     });
   } catch (error) {
+    if (browser) await browser.close();
     console.error("Extraction Error:", error.message);
     res.status(500).json({
       error: "데이터 추출 중 오류가 발생했습니다.",
