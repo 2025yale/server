@@ -6,11 +6,12 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
-const puppeteer = require("puppeteer"); // axios, cheerio 대체
+const puppeteer = require("puppeteer");
 
 const app = express();
 const server = http.createServer(app);
 
+// 1. CORS 설정을 최상단으로 이동 및 명시적 선언
 app.use(
   cors({
     origin: "*",
@@ -19,7 +20,9 @@ app.use(
   }),
 );
 
-app.options("*", cors());
+// 2. 모든 OPTIONS 요청에 대해 200 OK 응답 처리 (CORS 프리플라이트 해결)
+// 문법 수정: "*" -> "(.*)"
+app.options("(.*)", cors());
 
 app.use(express.json({ limit: "200mb" }));
 app.use(express.urlencoded({ limit: "200mb", extended: true }));
@@ -45,7 +48,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// URL 콘텐츠 추출 엔드포인트 (Puppeteer 적용)
+// URL 콘텐츠 추출 엔드포인트
 app.post("/extract-content", async (req, res) => {
   let browser;
   try {
@@ -58,7 +61,6 @@ app.post("/extract-content", async (req, res) => {
     });
 
     const page = await browser.newPage();
-    // 실제 사용자처럼 보이도록 User-Agent 설정
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     );
@@ -66,7 +68,6 @@ app.post("/extract-content", async (req, res) => {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
 
     const data = await page.evaluate(() => {
-      // 커뮤니티별 주요 셀렉터들을 우선순위대로 탐색
       const titleSelectors = [
         "h1.title",
         "h1",
