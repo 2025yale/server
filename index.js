@@ -86,11 +86,7 @@ app.post("/render", async (req, res) => {
 
       for (const clip of sortedClips) {
         filterCounter++;
-        if (
-          clip.type === "video" ||
-          clip.type === "image" ||
-          clip.type === "text"
-        ) {
+        if (["video", "image", "text"].includes(clip.type)) {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
@@ -108,35 +104,19 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 1. 스케일링된 최종 크기 계산
-          const w = Math.round(clip.width * scaleRatio);
-          const textPadding = (clip.textPadding || 0) * scaleRatio;
-          const h = Math.round(
-            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
-          );
+          // 실제 이미지 크기 스케일링
+          const w = Math.round(clip.realWidth * scaleRatio);
+          const h = Math.round(clip.realHeight * scaleRatio);
 
-          // 2. 좌표 변환 (Center -> Top-Left)
-          // 텍스트의 경우 padding만큼 좌측/상단으로 더 이동시켜야 시각적 중앙이 맞음
-          const x = Math.round(
-            clip.x * scaleRatio -
-              w / 2 -
-              (clip.type === "text" ? textPadding : 0),
-          );
-          const y = Math.round(
-            clip.y * scaleRatio -
-              h / 2 -
-              (clip.type === "text" ? textPadding : 0),
-          );
+          // Center 기준 좌표 -> Top-Left 기준 좌표 변환
+          // 클라이언트의 x, y가 중앙점이므로 이미지 절반만큼 빼줌
+          let finalX = clip.x * scaleRatio - w / 2;
+          let finalY = clip.y * scaleRatio - h / 2;
 
-          let transformArr = [
-            `scale=${w + (clip.type === "text" ? textPadding * 2 : 0)}:${h}`,
-            "format=yuva420p",
-          ];
+          let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
+
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
-
-          let finalX = x;
-          let finalY = y;
 
           if (clip.rotation && clip.rotation !== 0) {
             const rad = (clip.rotation * Math.PI) / 180;
@@ -147,22 +127,23 @@ app.post("/render", async (req, res) => {
               `pad=${diagonal}:${diagonal}:${padX}:${padY}:color=black@0`,
             );
             transformArr.push(`rotate=${rad}:c=none`);
-            finalX = x - padX;
-            finalY = y - padY;
+            finalX -= padX;
+            finalY -= padY;
           }
 
           const transformStr = transformArr.join(",");
           let filter =
-            clip.type === "image" || clip.type === "text"
-              ? `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
-              : `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
+            clip.type === "video"
+              ? `[${inputIdx}:v]trim=start=0:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`
+              : `[${inputIdx}:v]loop=-1:size=1:start=0,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.start}/TB,${transformStr}`;
 
           if (clip.opacity < 100)
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
+          // 그림자 보존을 위해 format=auto를 빼고 overlay 처리
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:format=auto[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
@@ -212,9 +193,7 @@ app.post("/render", async (req, res) => {
             socket.emit("render-progress", { percent: Math.min(99, percent) });
           }
         })
-        .on("error", (err) => {
-          reject(err);
-        })
+        .on("error", (err) => reject(err))
         .on("end", async () => {
           try {
             if (
