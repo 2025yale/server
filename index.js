@@ -6,13 +6,24 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
-const axios = require("axios"); // 신규 추가
-const cheerio = require("cheerio"); // 신규 추가
+const axios = require("axios");
+const cheerio = require("cheerio");
 
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors());
+// 1. CORS 설정을 최상단으로 이동 및 명시적 선언
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
+
+// 2. 모든 OPTIONS 요청에 대해 200 OK 응답 처리 (CORS 프리플라이트 해결)
+app.options("*", cors());
+
 app.use(express.json({ limit: "200mb" }));
 app.use(express.urlencoded({ limit: "200mb", extended: true }));
 
@@ -37,15 +48,12 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-/**
- * [추가 기능] 1단계: URL 기반 텍스트 추출 엔드포인트
- */
+// URL 콘텐츠 추출 엔드포인트
 app.post("/extract-content", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "URL이 누락되었습니다." });
 
-    // 실제 크롤링 로직
     const { data: html } = await axios.get(url, {
       headers: {
         "User-Agent":
@@ -55,20 +63,16 @@ app.post("/extract-content", async (req, res) => {
     });
 
     const $ = cheerio.load(html);
-
-    // 주요 커뮤니티 태그 분석 기반 추출
     const title = $("h1, h2, .title, #title, .title_subject")
       .first()
       .text()
       .trim();
-
-    // 본문 추출 (주요 게시판 공통 클래스 및 article 태그 타겟팅)
     const content = $(
       "article, .content, .post-content, #article_content, .write_div, .rd_body",
     )
       .first()
       .text()
-      .replace(/\s+/g, " ") // 연속 공백 및 줄바꿈 정리
+      .replace(/\s+/g, " ")
       .trim();
 
     res.json({
@@ -88,9 +92,6 @@ app.post("/extract-content", async (req, res) => {
   }
 });
 
-/**
- * 기존 렌더링 로직 (수정 없음)
- */
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
