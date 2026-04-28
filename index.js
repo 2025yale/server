@@ -6,24 +6,11 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
-const puppeteer = require("puppeteer");
 
 const app = express();
 const server = http.createServer(app);
 
-// 1. CORS 설정을 최상단으로 이동 및 명시적 선언
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
-
-// 2. 모든 OPTIONS 요청에 대해 200 OK 응답 처리 (CORS 프리플라이트 해결)
-// 문법 수정: "*" -> "(.*)"
-app.options("(.*)", cors());
-
+app.use(cors());
 app.use(express.json({ limit: "200mb" }));
 app.use(express.urlencoded({ limit: "200mb", extended: true }));
 
@@ -47,79 +34,6 @@ const timeToSeconds = (timeStr) => {
   }
   return seconds;
 };
-
-// URL 콘텐츠 추출 엔드포인트
-app.post("/extract-content", async (req, res) => {
-  let browser;
-  try {
-    const { url } = req.body;
-    if (!url) return res.status(400).json({ error: "URL이 누락되었습니다." });
-
-    browser = await puppeteer.launch({
-      headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    );
-
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-
-    const data = await page.evaluate(() => {
-      const titleSelectors = [
-        "h1.title",
-        "h1",
-        "h2",
-        ".title",
-        ".subject",
-        ".title_subject",
-        ".article_title",
-      ];
-      const contentSelectors = [
-        "article",
-        ".content",
-        ".post-content",
-        ".write_div",
-        ".rd_body",
-        "#article_content",
-        ".view_content",
-      ];
-
-      const findText = (selectors) => {
-        for (const s of selectors) {
-          const el = document.querySelector(s);
-          if (el && el.innerText.trim().length > 0) return el.innerText.trim();
-        }
-        return "";
-      };
-
-      return {
-        title: findText(titleSelectors),
-        content: findText(contentSelectors),
-      };
-    });
-
-    await browser.close();
-
-    res.json({
-      success: true,
-      data: {
-        title: data.title || "제목을 찾을 수 없음",
-        content: data.content || "본문 내용을 찾을 수 없음",
-        url: url,
-      },
-    });
-  } catch (error) {
-    if (browser) await browser.close();
-    console.error("Extraction Error:", error.message);
-    res.status(500).json({
-      error: "데이터 추출 중 오류가 발생했습니다.",
-      detail: error.message,
-    });
-  }
-});
 
 app.post("/render", async (req, res) => {
   try {
@@ -186,7 +100,7 @@ app.post("/render", async (req, res) => {
 
           command.input(currentInputPath);
           const scaledLabel = `v${filterCounter}scaled`;
-          const outputLabel = `v${filterCounter}out`;
+          const outputLabel = `v${filterCounter}out`; // 모든 요소는 중앙 기준(Center)으로 계산
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(
@@ -196,7 +110,7 @@ app.post("/render", async (req, res) => {
           let targetW = w;
           let targetH = h;
           let finalX = clip.x * scaleRatio - w / 2;
-          let finalY = clip.y * scaleRatio - h / 2;
+          let finalY = clip.y * scaleRatio - h / 2; // 텍스트일 경우 이미지에 포함된 패딩만큼 보정
 
           if (clip.type === "text") {
             const p = (clip.textPadding || 0) * scaleRatio;
