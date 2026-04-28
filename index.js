@@ -6,6 +6,8 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
+const axios = require("axios"); // 추가됨
+const cheerio = require("cheerio"); // 추가됨
 
 const app = express();
 const server = http.createServer(app);
@@ -35,6 +37,55 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
+// --- [추가] URL 본문 추출 엔드포인트 ---
+app.post("/extract-content", async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url)
+      return res
+        .status(400)
+        .json({ success: false, error: "URL이 누락되었습니다." });
+
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      timeout: 10000,
+    });
+
+    const $ = cheerio.load(response.data);
+    $("script, style, nav, footer, header, aside, iframe, noscript").remove();
+
+    const title = $("title").text().trim() || $("h1").first().text().trim();
+    let content = "";
+    const article = $("article, main").first();
+
+    if (article.length > 0) {
+      content = article.text().replace(/\s\s+/g, " ").trim();
+    } else {
+      content = $("p")
+        .map((i, el) => $(el).text())
+        .get()
+        .join("\n")
+        .replace(/\s\s+/g, " ")
+        .trim();
+    }
+
+    res.json({
+      success: true,
+      data: { title, content: content.substring(0, 5000), url },
+    });
+  } catch (error) {
+    console.error("Extraction Error:", error.message);
+    res.status(500).json({
+      success: false,
+      error: "서버에서 컨텐츠를 추출하는 데 실패했습니다.",
+    });
+  }
+});
+
+// --- 기존 render 엔드포인트 (수정 없음) ---
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
@@ -100,7 +151,7 @@ app.post("/render", async (req, res) => {
 
           command.input(currentInputPath);
           const scaledLabel = `v${filterCounter}scaled`;
-          const outputLabel = `v${filterCounter}out`; // 모든 요소는 중앙 기준(Center)으로 계산
+          const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(
@@ -110,7 +161,7 @@ app.post("/render", async (req, res) => {
           let targetW = w;
           let targetH = h;
           let finalX = clip.x * scaleRatio - w / 2;
-          let finalY = clip.y * scaleRatio - h / 2; // 텍스트일 경우 이미지에 포함된 패딩만큼 보정
+          let finalY = clip.y * scaleRatio - h / 2;
 
           if (clip.type === "text") {
             const p = (clip.textPadding || 0) * scaleRatio;
