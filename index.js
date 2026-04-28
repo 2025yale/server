@@ -110,16 +110,28 @@ app.post("/render", async (req, res) => {
 
           // 1. 스케일링된 최종 크기 계산
           const w = Math.round(clip.width * scaleRatio);
+          const textPadding = (clip.textPadding || 0) * scaleRatio;
           const h = Math.round(
             (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
           );
 
           // 2. 좌표 변환 (Center -> Top-Left)
-          // 에디터 좌표(clip.x, clip.y)에 비율을 곱한 뒤, 최종 크기의 절반을 뺍니다.
-          const x = Math.round(clip.x * scaleRatio - w / 2);
-          const y = Math.round(clip.y * scaleRatio - h / 2);
+          // 텍스트의 경우 padding만큼 좌측/상단으로 더 이동시켜야 시각적 중앙이 맞음
+          const x = Math.round(
+            clip.x * scaleRatio -
+              w / 2 -
+              (clip.type === "text" ? textPadding : 0),
+          );
+          const y = Math.round(
+            clip.y * scaleRatio -
+              h / 2 -
+              (clip.type === "text" ? textPadding : 0),
+          );
 
-          let transformArr = [`scale=${w}:${h}`, "format=yuva420p"];
+          let transformArr = [
+            `scale=${w + (clip.type === "text" ? textPadding * 2 : 0)}:${h}`,
+            "format=yuva420p",
+          ];
           if (clip.scaleX === -1) transformArr.push("hflip");
           if (clip.scaleY === -1) transformArr.push("vflip");
 
