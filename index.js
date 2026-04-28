@@ -6,6 +6,8 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
+const axios = require("axios"); // 신규 추가
+const cheerio = require("cheerio"); // 신규 추가
 
 const app = express();
 const server = http.createServer(app);
@@ -35,6 +37,60 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
+/**
+ * [추가 기능] 1단계: URL 기반 텍스트 추출 엔드포인트
+ */
+app.post("/extract-content", async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: "URL이 누락되었습니다." });
+
+    // 실제 크롤링 로직
+    const { data: html } = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      timeout: 5000,
+    });
+
+    const $ = cheerio.load(html);
+
+    // 주요 커뮤니티 태그 분석 기반 추출
+    const title = $("h1, h2, .title, #title, .title_subject")
+      .first()
+      .text()
+      .trim();
+
+    // 본문 추출 (주요 게시판 공통 클래스 및 article 태그 타겟팅)
+    const content = $(
+      "article, .content, .post-content, #article_content, .write_div, .rd_body",
+    )
+      .first()
+      .text()
+      .replace(/\s+/g, " ") // 연속 공백 및 줄바꿈 정리
+      .trim();
+
+    res.json({
+      success: true,
+      data: {
+        title: title || "제목을 찾을 수 없음",
+        content: content || "본문 내용을 찾을 수 없음",
+        url: url,
+      },
+    });
+  } catch (error) {
+    console.error("Extraction Error:", error.message);
+    res.status(500).json({
+      error: "데이터 추출 중 오류가 발생했습니다.",
+      detail: error.message,
+    });
+  }
+});
+
+/**
+ * 기존 렌더링 로직 (수정 없음)
+ */
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
@@ -102,7 +158,6 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 모든 요소는 중앙 기준(Center)으로 계산
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(
             (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
@@ -113,7 +168,6 @@ app.post("/render", async (req, res) => {
           let finalX = clip.x * scaleRatio - w / 2;
           let finalY = clip.y * scaleRatio - h / 2;
 
-          // 텍스트일 경우 이미지에 포함된 패딩만큼 보정
           if (clip.type === "text") {
             const p = (clip.textPadding || 0) * scaleRatio;
             targetW = w + p * 2;
