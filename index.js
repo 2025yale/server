@@ -108,18 +108,14 @@ app.post("/render", async (req, res) => {
           const scaledLabel = `v${filterCounter}scaled`;
           const outputLabel = `v${filterCounter}out`;
 
-          // 1. 실제 캔버스(여백 포함) 크기 계산
-          const textPadding = (clip.textPadding || 0) * scaleRatio;
-          const w =
-            Math.round(clip.width * scaleRatio) +
-            (clip.type === "text" ? textPadding * 2 : 0);
+          // 1. 스케일링된 최종 크기 계산
+          const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(
             (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
           );
 
           // 2. 좌표 변환 (Center -> Top-Left)
-          // 클라이언트의 clip.x는 텍스트 본체의 중앙이므로, 여백이 포함된 이미지 전체의 중앙을 맞추려면
-          // 여백이 포함된 전체 너비(w)의 절반을 빼야 합니다.
+          // 에디터 좌표(clip.x, clip.y)에 비율을 곱한 뒤, 최종 크기의 절반을 뺍니다.
           const x = Math.round(clip.x * scaleRatio - w / 2);
           const y = Math.round(clip.y * scaleRatio - h / 2);
 
@@ -153,9 +149,8 @@ app.post("/render", async (req, res) => {
             filter += `,colorchannelmixer=aa=${clip.opacity / 100}`;
 
           videoFilters.push(`${filter}[${scaledLabel}]`);
-          // 그림자 유지를 위해 format=auto 제거
           videoFilters.push(
-            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass[${outputLabel}]`,
+            `[${lastVideoLabel}][${scaledLabel}]overlay=x=${Math.round(finalX)}:y=${Math.round(finalY)}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:format=auto[${outputLabel}]`,
           );
 
           lastVideoLabel = outputLabel;
