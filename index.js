@@ -78,7 +78,11 @@ app.post("/extract-content", async (req, res) => {
       return res.status(404).json({ error: "본문 내용을 찾을 수 없습니다." });
     }
 
-    res.json({ text: extractedText.trim() });
+    // 기존의 text 결과값과 함께, 요청하신 html 전체 데이터(response.data)를 반환합니다.
+    res.json({
+      text: extractedText.trim(),
+      html: response.data,
+    });
   } catch (error) {
     res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
