@@ -1,5 +1,5 @@
 # 1. Node.js 이미지를 베이스로 사용
-FROM node:18-slim
+FROM node:20-slim
 
 # 2. FFmpeg 설치 (Debian 패키지 매니저 이용)
 RUN apt-get update && \
