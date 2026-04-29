@@ -6,6 +6,8 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
+const axios = require("axios"); // 추가
+const cheerio = require("cheerio"); // 추가
 
 const app = express();
 const server = http.createServer(app);
@@ -34,6 +36,53 @@ const timeToSeconds = (timeStr) => {
   }
   return seconds;
 };
+
+// URL 본문 추출 엔드포인트 추가
+app.post("/extract-content", async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: "URL이 누락되었습니다." });
+
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      timeout: 5000,
+    });
+
+    const $ = cheerio.load(response.data);
+
+    // 불필요한 요소 제거
+    $("script, style, nav, footer, header, aside, iframe, noscript").remove();
+
+    // 본문으로 추정되는 텍스트 추출 (p, h1, h2, h3, div 등)
+    // 여기서는 가장 대중적인 방식인 p 태그 위주 및 주요 컨테이너 텍스트 추출 방식을 사용합니다.
+    let extractedText = "";
+
+    // 우선순위가 높은 태그들에서 텍스트 수집
+    $("article, main, .content, .post, #content")
+      .find("p, h1, h2, h3")
+      .each((i, el) => {
+        extractedText += $(el).text().trim() + "\n";
+      });
+
+    // 위에서 추출이 안 된 경우 일반적인 p 태그 전체 수집
+    if (extractedText.trim().length < 10) {
+      $("p").each((i, el) => {
+        extractedText += $(el).text().trim() + "\n";
+      });
+    }
+
+    if (!extractedText.trim()) {
+      return res.status(404).json({ error: "본문 내용을 찾을 수 없습니다." });
+    }
+
+    res.json({ text: extractedText.trim() });
+  } catch (error) {
+    res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
+  }
+});
 
 app.post("/render", async (req, res) => {
   try {
@@ -100,7 +149,7 @@ app.post("/render", async (req, res) => {
 
           command.input(currentInputPath);
           const scaledLabel = `v${filterCounter}scaled`;
-          const outputLabel = `v${filterCounter}out`; // 모든 요소는 중앙 기준(Center)으로 계산
+          const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
           const h = Math.round(
@@ -110,7 +159,7 @@ app.post("/render", async (req, res) => {
           let targetW = w;
           let targetH = h;
           let finalX = clip.x * scaleRatio - w / 2;
-          let finalY = clip.y * scaleRatio - h / 2; // 텍스트일 경우 이미지에 포함된 패딩만큼 보정
+          let finalY = clip.y * scaleRatio - h / 2;
 
           if (clip.type === "text") {
             const p = (clip.textPadding || 0) * scaleRatio;
