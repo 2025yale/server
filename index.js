@@ -41,7 +41,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// URL 본문 추출 및 AI 가공 엔드포인트
+// URL 본문 추출 엔드포인트
 app.post("/extract-content", async (req, res) => {
   try {
     const { url } = req.body;
@@ -60,55 +60,36 @@ app.post("/extract-content", async (req, res) => {
     });
 
     const $ = cheerio.load(response.data);
-    $("script, style, iframe, noscript, svg, path, link").remove();
 
-    // 본문 텍스트 추출 (AI에게 전달할 용도)
+    // 불필요한 요소 제거
+    $(
+      "script, style, iframe, noscript, svg, path, link, footer, nav, header",
+    ).remove();
+
     const rawText = $("body")
       .text()
       .replace(/\s\s+/g, " ")
       .trim()
-      .substring(0, 4500);
+      .substring(0, 6000);
 
-    // Gemini 2.0 Flash-Lite 모델 설정
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-      generationConfig: {
-        responseMimeType: "application/json",
-      },
-    });
-
-    // 본문과 하단 게시글 리스트를 엄격히 구분하는 프롬프트
+    // AI에게는 "순수하게 본문으로 판단되는 텍스트만 추출"하도록 시킴 (자막 가공 X)
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const prompt = `
-      입력된 텍스트는 커뮤니티 사이트의 게시글 페이지이다. 하단의 '글 목록'이나 '광고'를 본문으로 착각하지 말고 오직 해당 페이지의 '메인 게시글' 내용만 추출하라.
+      다음 웹페이지 텍스트 데이터에서 광고, 메뉴, 하단 게시글 목록, 저작권 정보를 모두 제외하고 
+      게시글의 제목과 본문 내용만 그대로 추출해서 평문으로 보여줘. 
+      아무런 가공이나 요약도 하지 말고 본문만 골라내줘.
 
-      지침:
-      1. [본문 판별]: 텍스트 상단에 위치한 게시글 제목과 그 바로 아래 이어지는 내용만 본문으로 인정한다. 
-      2. [목록 무시]: 텍스트 하단에 수많은 제목들이 나열된 '갤러리 리스트', '게시글 목록' 섹션은 절대 본문에 포함시키지 마라. (예: 번호, 제목, 작성일, 조회수 등이 반복되는 구간은 완전히 무시한다.)
-      3. [핵심 요약]: 추출된 '하나의 메인 게시글' 주제에 대해서만 핵심 내용을 요약하라.
-      4. [자막화]: 요약 내용을 20자 이내의 한국어 자막 문장들로 구성하라.
-      5. [응답 형식]: 다른 설명 없이 순수한 JSON 배열 ["문장1", "문장2", ...] 형식으로만 응답하라.
-
-      데이터:
-      ${rawText}
+      데이터: ${rawText}
     `;
 
     const result = await model.generateContent(prompt);
-    const aiResponse = result.response.text();
-
-    let captions = [];
-    try {
-      captions = JSON.parse(aiResponse);
-    } catch (parseError) {
-      const jsonMatch = aiResponse.match(/\[.*\]/s);
-      captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-    }
+    const extractedContent = result.response.text();
 
     res.json({
-      html: $.html(),
-      captions: captions,
+      content: extractedContent,
     });
   } catch (error) {
-    console.error("AI 가공 에러:", error);
+    console.error("Extraction Error:", error);
     res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
 });
