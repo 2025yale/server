@@ -62,48 +62,57 @@ app.post("/extract-content", async (req, res) => {
     const $ = cheerio.load(response.data);
     $("script, style, iframe, noscript, svg, path, link").remove();
 
-    // 기본 본문 텍스트 추출
+    // 본문 텍스트 추출 및 정제
     const rawText = $("body")
       .text()
       .replace(/\s\s+/g, " ")
       .trim()
       .substring(0, 4000);
 
-    // 모델 식별자를 'gemini-1.5-flash'로 설정합니다.
-    // 최신 SDK에서는 'models/' 접두사 없이 모델명만 입력하는 것이 표준입니다.
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // Gemini 2.5 Flash-Lite 모델 설정 (Google AI Studio 최신 라이트 모델)
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash-lite",
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    });
 
     const prompt = `
-      다음 본문 내용을 바탕으로 숏폼 영상에 들어갈 자막을 작성해줘.
-      조건:
-      1. 각 문장은 반드시 20자 이내로 작성할 것.
-      2. 전체 맥락을 알 수 있게 핵심 내용만 요약할 것.
-      3. 응답은 반드시 JSON 배열 형태인 ["문장1", "문장2", ...] 형식으로만 보낼 것.
-      4. 다른 설명이나 텍스트는 포함하지 말 것.
-
-      본문: ${rawText}
+      Extract the main content from the following text and summarize it into short captions for a short-form video.
+      Rules:
+      1. Each caption must be under 20 characters in Korean.
+      2. Summarize key points only.
+      3. Return a JSON array of strings: ["caption1", "caption2", ...].
+      
+      Text: ${rawText}
     `;
 
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
 
-    // JSON 추출 정밀화 (백틱이나 추가 텍스트 제거)
-    const jsonMatch = aiResponse.match(/\[.*\]/s);
-    const captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    // JSON 응답 강제 설정으로 인해 aiResponse는 바로 파싱 가능하거나 배열 형태임
+    let captions = [];
+    try {
+      captions = JSON.parse(aiResponse);
+    } catch (parseError) {
+      // 만약 JSON 파싱 실패 시 정규식으로 재시도
+      const jsonMatch = aiResponse.match(/\[.*\]/s);
+      captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    }
 
     res.json({
       html: $.html(),
       captions: captions,
     });
   } catch (error) {
-    console.error("Gemini API Error Detail:", error);
+    console.error("AI Extraction Error:", error);
     res
       .status(500)
       .json({ error: "콘텐츠 추출 및 가공 실패: " + error.message });
   }
 });
 
-// 영상 렌더링 로직 (기존 코드 유지)
+// 영상 렌더링 로직 (수정하지 않음)
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
