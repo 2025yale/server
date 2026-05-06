@@ -8,7 +8,6 @@ const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const server = http.createServer(app);
@@ -25,9 +24,6 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
-
-// Gemini AI 설정
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
@@ -61,35 +57,15 @@ app.post("/extract-content", async (req, res) => {
 
     const $ = cheerio.load(response.data);
 
-    // 불필요한 요소 제거
+    // 1차 필터링: 본문 손실 방지를 위해 최소한의 비표시 태그만 제거
     $(
-      "script, style, iframe, noscript, svg, path, link, footer, nav, header",
+      "script, style, iframe, noscript, svg, link, header, footer, nav, aside",
     ).remove();
 
-    const rawText = $("body")
-      .text()
-      .replace(/\s\s+/g, " ")
-      .trim()
-      .substring(0, 6000);
-
-    // AI에게는 "순수하게 본문으로 판단되는 텍스트만 추출"하도록 시킴 (자막 가공 X)
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-    const prompt = `
-      다음 웹페이지 텍스트 데이터에서 광고, 메뉴, 하단 게시글 목록, 저작권 정보를 모두 제외하고 
-      게시글의 제목과 본문 내용만 그대로 추출해서 평문으로 보여줘. 
-      아무런 가공이나 요약도 하지 말고 본문만 골라내줘.
-
-      데이터: ${rawText}
-    `;
-
-    const result = await model.generateContent(prompt);
-    const extractedContent = result.response.text();
-
     res.json({
-      content: extractedContent,
+      html: $("body").html(), // body 내부 전체를 반환하여 클라이언트에서 정밀 추출
     });
   } catch (error) {
-    console.error("Extraction Error:", error);
     res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
 });
