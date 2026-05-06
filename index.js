@@ -26,7 +26,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// Gemini AI 설정
+// Gemini AI 설정 (모델 식별자 수정)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const timeToSeconds = (timeStr) => {
@@ -69,8 +69,10 @@ app.post("/extract-content", async (req, res) => {
       .trim()
       .substring(0, 4000);
 
-    // Gemini를 이용한 요약 및 자막 생성
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // Gemini를 이용한 요약 및 자막 생성 (식별자를 gemini-1.5-flash-latest로 변경하여 호환성 확보)
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash-latest",
+    });
     const prompt = `
       다음 본문 내용을 바탕으로 숏폼 영상에 들어갈 자막을 작성해줘.
       조건:
@@ -85,7 +87,7 @@ app.post("/extract-content", async (req, res) => {
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
 
-    // JSON 추출 (코드 블록 제거 등)
+    // JSON 추출 (코드 블록 제거 및 순수 배열 파싱)
     const jsonMatch = aiResponse.match(/\[.*\]/s);
     const captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
 
@@ -94,6 +96,8 @@ app.post("/extract-content", async (req, res) => {
       captions: captions,
     });
   } catch (error) {
+    // 상세한 에러 로그 출력
+    console.error("AI 가공 중 상세 에러:", error);
     res
       .status(500)
       .json({ error: "콘텐츠 추출 및 가공 실패: " + error.message });
