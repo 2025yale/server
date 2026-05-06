@@ -8,7 +8,7 @@ const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { GoogleGenerativeAI } = require("@google/generative-ai"); // 추가
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const server = http.createServer(app);
@@ -26,9 +26,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// Gemini 설정
+// Gemini AI 설정
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
@@ -42,7 +41,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// URL 본문 추출 엔드포인트 (기존 로직 유지)
+// URL 본문 추출 및 AI 가공 엔드포인트
 app.post("/extract-content", async (req, res) => {
   try {
     const { url } = req.body;
@@ -63,100 +62,45 @@ app.post("/extract-content", async (req, res) => {
     const $ = cheerio.load(response.data);
     $("script, style, iframe, noscript, svg, path, link").remove();
 
-    res.json({
-      html: $.html(),
-    });
-  } catch (error) {
-    res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
-  }
-});
+    // 기본 본문 텍스트 추출 (AI에게 전달할 용도)
+    const rawText = $("body")
+      .text()
+      .replace(/\s\s+/g, " ")
+      .trim()
+      .substring(0, 4000);
 
-// AI 텍스트 분할 및 새 프로젝트 생성 엔드포인트 (신규)
-app.post("/generate-auto-project", async (req, res) => {
-  try {
-    const { text, userId } = req.body;
-    if (!text || !userId)
-      return res.status(400).json({ error: "필수 데이터가 누락되었습니다." });
-
-    // 1. Gemini를 이용한 텍스트 분할
+    // Gemini를 이용한 요약 및 자막 생성
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const prompt = `
-      다음 본문 내용을 바탕으로 쇼츠 영상 제작을 위한 자막 대본을 만들어줘.
+      다음 본문 내용을 바탕으로 숏폼 영상에 들어갈 자막을 작성해줘.
       조건:
-      1. 각 문장은 20자 내외로 짧고 자연스럽게 끊어야 함.
-      2. 전체 흐름이 매끄러워야 함.
-      3. 오직 JSON 배열 형태로만 응답해. 예: ["문장1", "문장2"]
-      
-      본문 내용:
-      ${text}
+      1. 각 문장은 반드시 20자 이내로 작성할 것.
+      2. 전체 맥락을 알 수 있게 핵심 내용만 요약할 것.
+      3. 응답은 반드시 JSON 배열 형태인 ["문장1", "문장2", ...] 형식으로만 보낼 것.
+      4. 다른 설명이나 텍스트는 포함하지 말 것.
+
+      본문: ${rawText}
     `;
 
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
 
-    // JSON 추출 (Markdown 코드 블록 제거)
+    // JSON 추출 (코드 블록 제거 등)
     const jsonMatch = aiResponse.match(/\[.*\]/s);
-    const textSegments = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    const captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
 
-    if (textSegments.length === 0) throw new Error("AI 가공에 실패했습니다.");
-
-    // 2. 프로젝트 구조 생성
-    const newId = `project-${Date.now()}`;
-    const DEFAULT_DURATION = 2; // 각 텍스트당 재생 시간 (초)
-    const CANVAS_W = 1080;
-    const CANVAS_H = 1920;
-
-    const textClips = textSegments.map((content, index) => ({
-      id: `text-auto-${Date.now()}-${index}`,
-      type: "text",
-      title: "AI 자막",
-      text: content,
-      start: index * DEFAULT_DURATION,
-      duration: DEFAULT_DURATION,
-      color: "bg-blue-500",
-      x: CANVAS_W / 2,
-      y: CANVAS_H / 2,
-      width: 800,
-      height: 200,
-      opacity: 100,
-      rotation: 0,
-      scaleX: 1,
-      scaleY: 1,
-      fontSize: 40,
-      fontFamily: "NotoSansKR",
-      fontWeight: "normal",
-      textColor: "#ffffff",
-      textAlign: "center",
-      shadow: true,
-    }));
-
-    // 트랙 구성 (1번 트랙에 모든 텍스트 배치)
-    const tracks = [
-      { id: 1, visible: true, clips: textClips },
-      { id: 2, visible: true, clips: [] },
-      { id: 3, visible: true, clips: [] },
-      { id: 4, visible: true, clips: [] },
-    ];
-
-    const newProject = {
-      id_string: newId,
-      user_id: userId,
-      title: "AI 자동 생성 프로젝트",
-      tracks: tracks,
-      updated_at: new Date().toISOString(),
-    };
-
-    // 3. Supabase 저장
-    const { error } = await supabase.from("editor_projects").insert(newProject);
-    if (error) throw error;
-
-    res.json({ success: true, id_string: newId });
+    res.json({
+      html: $.html(),
+      captions: captions,
+    });
   } catch (error) {
-    console.error("Auto Project Error:", error);
-    res.status(500).json({ error: "프로젝트 생성 실패: " + error.message });
+    res
+      .status(500)
+      .json({ error: "콘텐츠 추출 및 가공 실패: " + error.message });
   }
 });
 
-// 영상 렌더링 로직 (기존 로직 유지)
+// 영상 렌더링 로직 (수정하지 않음)
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
