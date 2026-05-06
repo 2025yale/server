@@ -52,24 +52,27 @@ app.post("/extract-content", async (req, res) => {
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         Referer: "https://www.google.com/",
       },
-      timeout: 5000,
+      timeout: 10000, // 타임아웃을 10초로 확장하여 안정성 확보
     });
 
     const $ = cheerio.load(response.data);
+    $(
+      "script, style, iframe, noscript, svg, path, link, header, footer, nav, aside",
+    ).remove();
 
-    // 1차 필터링: 클라이언트 부하를 줄이기 위해 절대적으로 불필요한 태그만 제거
-    $("script, style, iframe, noscript, svg, path, link").remove();
-
-    // 본문 추출 알고리즘은 클라이언트에서 정밀하게 수행하므로 전체 HTML을 반환
     res.json({
       html: $.html(),
     });
   } catch (error) {
-    res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
+    // 힙합엘이 등 보안 사이트에서 403/Timeout 발생 시 클라이언트에 신호를 보냄
+    res.status(500).json({
+      error: "서버가 접근할 수 없습니다. 클라이언트 우회 모드를 실행합니다.",
+      isBlocked: true,
+    });
   }
 });
 
-// 영상 렌더링 로직 (수정하지 않음)
+// 영상 렌더링 로직 (기존 유지)
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
