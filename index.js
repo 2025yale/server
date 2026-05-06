@@ -62,14 +62,14 @@ app.post("/extract-content", async (req, res) => {
     const $ = cheerio.load(response.data);
     $("script, style, iframe, noscript, svg, path, link").remove();
 
-    // 본문 텍스트 추출 및 정제
+    // 본문 텍스트 추출 (AI에게 전달할 용도)
     const rawText = $("body")
       .text()
       .replace(/\s\s+/g, " ")
       .trim()
-      .substring(0, 4000);
+      .substring(0, 4500);
 
-    // Gemini 2.5 Flash-Lite 모델 설정 (Google AI Studio 최신 라이트 모델)
+    // Gemini 2.0 Flash-Lite 모델 설정
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash-lite",
       generationConfig: {
@@ -77,25 +77,27 @@ app.post("/extract-content", async (req, res) => {
       },
     });
 
+    // 1차 필터링 및 본문 추출 로직을 강화한 한국어 프롬프트
     const prompt = `
-      Extract the main content from the following text and summarize it into short captions for a short-form video.
-      Rules:
-      1. Each caption must be under 20 characters in Korean.
-      2. Summarize key points only.
-      3. Return a JSON array of strings: ["caption1", "caption2", ...].
-      
-      Text: ${rawText}
+      입력된 텍스트는 특정 웹사이트에서 추출된 원문 데이터이다. 아래 지침에 따라 숏폼 영상용 자막 데이터를 생성하라.
+
+      지침:
+      1. [본문 판별]: 가장 먼저 텍스트 전체를 분석하여 메뉴, 광고, 푸터 정보, 댓글, 사이드바 내용을 완전히 제외하고 '작성자가 쓴 실제 본문 내용'만 골라내라.
+      2. [핵심 요약]: 골라낸 본문에서 가장 중요하고 흥미로운 핵심 내용만 요약하라.
+      3. [자막화]: 요약된 내용을 숏폼 영상에 적합하도록 각 문장당 20자 이내의 자연스러운 한국어로 구성하라.
+      4. [응답 형식]: 반드시 다른 설명 없이 순수한 JSON 배열 ["문장1", "문장2", ...] 형식으로만 응답하라.
+
+      데이터:
+      ${rawText}
     `;
 
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
 
-    // JSON 응답 강제 설정으로 인해 aiResponse는 바로 파싱 가능하거나 배열 형태임
     let captions = [];
     try {
       captions = JSON.parse(aiResponse);
     } catch (parseError) {
-      // 만약 JSON 파싱 실패 시 정규식으로 재시도
       const jsonMatch = aiResponse.match(/\[.*\]/s);
       captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
     }
@@ -105,10 +107,8 @@ app.post("/extract-content", async (req, res) => {
       captions: captions,
     });
   } catch (error) {
-    console.error("AI Extraction Error:", error);
-    res
-      .status(500)
-      .json({ error: "콘텐츠 추출 및 가공 실패: " + error.message });
+    console.error("AI 가공 에러:", error);
+    res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
 });
 
