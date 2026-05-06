@@ -26,7 +26,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// Gemini AI 설정 (모델 식별자 수정)
+// Gemini AI 설정
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const timeToSeconds = (timeStr) => {
@@ -62,17 +62,17 @@ app.post("/extract-content", async (req, res) => {
     const $ = cheerio.load(response.data);
     $("script, style, iframe, noscript, svg, path, link").remove();
 
-    // 기본 본문 텍스트 추출 (AI에게 전달할 용도)
+    // 기본 본문 텍스트 추출
     const rawText = $("body")
       .text()
       .replace(/\s\s+/g, " ")
       .trim()
       .substring(0, 4000);
 
-    // Gemini를 이용한 요약 및 자막 생성 (식별자를 gemini-1.5-flash-latest로 변경하여 호환성 확보)
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash-latest",
-    });
+    // 모델 식별자를 'gemini-1.5-flash'로 설정합니다.
+    // 최신 SDK에서는 'models/' 접두사 없이 모델명만 입력하는 것이 표준입니다.
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
     const prompt = `
       다음 본문 내용을 바탕으로 숏폼 영상에 들어갈 자막을 작성해줘.
       조건:
@@ -87,7 +87,7 @@ app.post("/extract-content", async (req, res) => {
     const result = await model.generateContent(prompt);
     const aiResponse = result.response.text();
 
-    // JSON 추출 (코드 블록 제거 및 순수 배열 파싱)
+    // JSON 추출 정밀화 (백틱이나 추가 텍스트 제거)
     const jsonMatch = aiResponse.match(/\[.*\]/s);
     const captions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
 
@@ -96,15 +96,14 @@ app.post("/extract-content", async (req, res) => {
       captions: captions,
     });
   } catch (error) {
-    // 상세한 에러 로그 출력
-    console.error("AI 가공 중 상세 에러:", error);
+    console.error("Gemini API Error Detail:", error);
     res
       .status(500)
       .json({ error: "콘텐츠 추출 및 가공 실패: " + error.message });
   }
 });
 
-// 영상 렌더링 로직 (수정하지 않음)
+// 영상 렌더링 로직 (기존 코드 유지)
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
