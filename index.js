@@ -8,7 +8,7 @@ const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenerativeAI } = require("@google/generative-ai"); // Gemini 추가
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +26,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+// Gemini AI 설정
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const timeToSeconds = (timeStr) => {
@@ -40,7 +41,7 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// URL 본문 추출 엔드포인트
+// URL 본문 추출 엔드포인트 (기존 유지)
 app.post("/extract-content", async (req, res) => {
   try {
     const { url } = req.body;
@@ -59,7 +60,6 @@ app.post("/extract-content", async (req, res) => {
     });
 
     const $ = cheerio.load(response.data);
-
     $(
       "script, style, iframe, noscript, svg, link, header, footer, nav, aside",
     ).remove();
@@ -73,24 +73,32 @@ app.post("/extract-content", async (req, res) => {
 });
 
 // 어조 변환 엔드포인트 추가
-app.post("/change-tone", async (req, res) => {
+app.post("/convert-tone", async (req, res) => {
   try {
     const { text, tone } = req.body;
-    if (!text || !tone) return res.status(400).json({ error: "데이터 부족" });
+    if (!text || !tone)
+      return res.status(400).json({ error: "데이터가 부족합니다." });
 
     const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    const prompt = `다음 텍스트를 '${tone}' 어조로 자연스럽게 변경해줘. 원문의 의미를 유지하되 문장 끝처리를 '${tone}'의 핵심 특징에 맞춰서 바꿔줘. 오직 변환된 텍스트만 응답해.\n\n텍스트: ${text}`;
+    const prompt = `다음 텍스트를 자연스러운 '${tone}'으로 변환해줘. 
+    - 원문 내용과 의미는 절대 변경하지 마.
+    - 문장의 종결 어미만 자연스럽게 수정해.
+    - 변환된 결과 텍스트만 출력해.
+    
+    텍스트:
+    ${text}`;
 
     const result = await model.generateContent(prompt);
-    const transformedText = result.response.text();
+    const response = await result.response;
+    const convertedText = response.text();
 
-    res.json({ transformedText });
+    res.json({ convertedText });
   } catch (error) {
     res.status(500).json({ error: "어조 변환 실패: " + error.message });
   }
 });
 
-// 영상 렌더링 로직
+// 영상 렌더링 로직 (기존 유지)
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
