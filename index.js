@@ -8,7 +8,7 @@ const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { GoogleGenerativeAI } = require("@google/generative-ai"); // Gemini 추가
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const server = http.createServer(app);
@@ -26,7 +26,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// Gemini AI 설정
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const timeToSeconds = (timeStr) => {
@@ -41,7 +40,6 @@ const timeToSeconds = (timeStr) => {
   return seconds;
 };
 
-// URL 본문 추출 엔드포인트 (기존 유지)
 app.post("/extract-content", async (req, res) => {
   try {
     const { url } = req.body;
@@ -72,33 +70,36 @@ app.post("/extract-content", async (req, res) => {
   }
 });
 
-// 어조 변환 엔드포인트 추가
 app.post("/convert-tone", async (req, res) => {
   try {
-    const { text, tone } = req.body;
-    if (!text || !tone)
+    const { lines, tone } = req.body;
+    if (!lines || !Array.isArray(lines) || !tone)
       return res.status(400).json({ error: "데이터가 부족합니다." });
 
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    const prompt = `다음 텍스트를 자연스러운 '${tone}'으로 변환해줘. 
-    - 원문 내용과 의미는 절대 변경하지 마.
-    - 문장의 종결 어미만 자연스럽게 수정해.
-    - 변환된 결과 텍스트만 출력해.
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    const prompt = `당신은 전문 편집자입니다. 제공된 문장 배열의 각 문장을 자연스러운 '${tone}'으로 변환하세요.
+    - 배열 형식을 유지하여 JSON으로만 응답하세요: { "convertedLines": ["문장1", "문장2", ...] }
+    - 원문의 정보와 의미를 절대 훼손하지 마세요.
+    - 불필요한 설명은 제외하세요.
     
-    텍스트:
-    ${text}`;
+    문장 목록:
+    ${JSON.stringify(lines)}`;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    const convertedText = response.text();
+    let resultText = response.text();
 
-    res.json({ convertedText });
+    // JSON 추출
+    const jsonMatch = resultText.match(/\{.*\}/s);
+    if (!jsonMatch) throw new Error("AI 응답 형식이 올바르지 않습니다.");
+
+    const parsedData = JSON.parse(jsonMatch[0]);
+    res.json({ convertedLines: parsedData.convertedLines });
   } catch (error) {
     res.status(500).json({ error: "어조 변환 실패: " + error.message });
   }
 });
 
-// 영상 렌더링 로직 (기존 유지)
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
