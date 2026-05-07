@@ -8,6 +8,7 @@ const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
 const cheerio = require("cheerio");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +25,8 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const timeToSeconds = (timeStr) => {
   if (!timeStr) return 0;
@@ -57,20 +60,37 @@ app.post("/extract-content", async (req, res) => {
 
     const $ = cheerio.load(response.data);
 
-    // 1차 필터링: 본문 손실 방지를 위해 최소한의 비표시 태그만 제거
     $(
       "script, style, iframe, noscript, svg, link, header, footer, nav, aside",
     ).remove();
 
     res.json({
-      html: $("body").html(), // body 내부 전체를 반환하여 클라이언트에서 정밀 추출
+      html: $("body").html(),
     });
   } catch (error) {
     res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
 });
 
-// 영상 렌더링 로직 (수정하지 않음)
+// 어조 변환 엔드포인트 추가
+app.post("/change-tone", async (req, res) => {
+  try {
+    const { text, tone } = req.body;
+    if (!text || !tone) return res.status(400).json({ error: "데이터 부족" });
+
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const prompt = `다음 텍스트를 '${tone}' 어조로 자연스럽게 변경해줘. 원문의 의미를 유지하되 문장 끝처리를 '${tone}'의 핵심 특징에 맞춰서 바꿔줘. 오직 변환된 텍스트만 응답해.\n\n텍스트: ${text}`;
+
+    const result = await model.generateContent(prompt);
+    const transformedText = result.response.text();
+
+    res.json({ transformedText });
+  } catch (error) {
+    res.status(500).json({ error: "어조 변환 실패: " + error.message });
+  }
+});
+
+// 영상 렌더링 로직
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
