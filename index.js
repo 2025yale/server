@@ -139,7 +139,7 @@ app.post("/generate-images-batch", async (req, res) => {
   try {
     const { prompts, projectId } = req.body;
     const model = genAI.getGenerativeModel({
-      model: "gemini-3.1-flash-image-preview",
+      model: "gemini-2.5-flash-image",
     });
     const imageUrls = [];
 
