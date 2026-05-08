@@ -104,7 +104,6 @@ app.post("/convert-tone", async (req, res) => {
   }
 });
 
-// 신규: 이미지 생성을 위한 프롬프트 생산 엔드포인트
 app.post("/generate-image-prompts", async (req, res) => {
   try {
     const { lines } = req.body;
@@ -114,11 +113,10 @@ app.post("/generate-image-prompts", async (req, res) => {
     제공된 문장 목록은 하나의 영상 흐름입니다. 전체 맥락을 유지하면서, 각 문장과 완벽히 매치되는 이미지 생성용 영문 프롬프트를 작성하세요.
     
     [요구 사항]
-    1. 전체 영상의 비주얼 스타일이 일관되어야 합니다. (예: 일러스트면 끝까지 일러스트, 실사면 끝까지 실사)
-    2. 각 프롬프트는 1:1 비율 이미지 생성에 최적화된 구체적인 묘사를 포함해야 합니다.
-    3. 추상적인 단어보다는 시각적인 묘사(색감, 조명, 구도)를 위주로 작성하세요.
-    4. 응답은 반드시 JSON 형식이어야 합니다: { "prompts": ["prompt 1", "prompt 2", ...] }
-    5. 입력 배열의 개수(${lines.length}개)와 출력 프롬프트 배열의 개수는 반드시 일치해야 합니다.
+    1. 전체 영상의 비주얼 스타일이 일관되어야 합니다.
+    2. 각 프롬프트는 1:1 비율 이미지 생성에 최적화된 구체적인 영문 묘사를 포함해야 합니다.
+    3. 응답은 반드시 JSON 형식이어야 합니다: { "prompts": ["prompt 1", "prompt 2", ...] }
+    4. 입력 배열의 개수(${lines.length}개)와 출력 프롬프트 배열의 개수는 반드시 일치해야 합니다.
 
     문장 목록:
     ${JSON.stringify(lines)}`;
@@ -134,31 +132,34 @@ app.post("/generate-image-prompts", async (req, res) => {
   }
 });
 
-// 신규: 이미지 실제 생성 및 Supabase 업로드 엔드포인트
+// 모델 변경: gemini-2.5-flash-image 및 2초 간격 추가
 app.post("/generate-images-batch", async (req, res) => {
   try {
     const { prompts, projectId } = req.body;
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-image",
-    });
+    // 효율성과 속도에 최적화된 2.5 모델 사용
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-image" });
     const imageUrls = [];
 
     for (let i = 0; i < prompts.length; i++) {
-      // 이미지 생성 (1:1 비율 명시)
+      // 429 에러 방지를 위한 2초 간격 (첫 번째 요청 제외)
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
       const result = await model.generateContent({
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: prompts[i] + " --aspect_ratio 1:1" }],
+        contents: [{ role: "user", parts: [{ text: prompts[i] }] }],
+        config: {
+          imageConfig: {
+            aspectRatio: "1:1",
           },
-        ],
+        },
       });
 
       const response = await result.response;
-      // 이미지 모델은 일반적으로 base64 혹은 특정 포맷을 반환한다고 가정 (SDK 스펙에 따름)
-      // 실제 구현 시 SDK의 이미지 추출 로직 필요
-      const base64Data =
-        response.candidates[0].content.parts[0].inlineData.data;
+      // 인라인 이미지 데이터 추출
+      const base64Data = response.candidates[0].content.parts.find(
+        (p) => p.inlineData,
+      ).inlineData.data;
       const buffer = Buffer.from(base64Data, "base64");
 
       const fileName = `gen_${projectId}_${i}_${Date.now()}.png`;
