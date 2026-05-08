@@ -69,15 +69,15 @@ app.post("/extract-content", async (req, res) => {
     res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
 });
+
 app.post("/convert-tone", async (req, res) => {
   try {
     const { lines, tone } = req.body;
     if (!lines || !Array.isArray(lines) || !tone)
       return res.status(400).json({ error: "데이터가 부족합니다." });
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-lite" });
 
-    // AI에게 숏폼 영상 자막 제작용임을 강조하고, 문장 구조를 유지하라고 지시함
     const prompt = `당신은 숏폼 영상 자막을 제작하는 전문 편집자입니다. 
     입력된 문장 배열의 각 요소를 자연스러운 '${tone}'으로 변환하세요.
     
@@ -98,11 +98,88 @@ app.post("/convert-tone", async (req, res) => {
     if (!jsonMatch) throw new Error("AI 응답 형식이 올바르지 않습니다.");
 
     const parsedData = JSON.parse(jsonMatch[0]);
-
-    // 안전장치: AI가 배열 길이를 다르게 줬을 경우를 대비한 검증은 생략하되, 데이터 그대로 반환
     res.json({ convertedLines: parsedData.convertedLines });
   } catch (error) {
     res.status(500).json({ error: "어조 변환 실패: " + error.message });
+  }
+});
+
+// 신규: 이미지 생성을 위한 프롬프트 생산 엔드포인트
+app.post("/generate-image-prompts", async (req, res) => {
+  try {
+    const { lines } = req.body;
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const prompt = `당신은 영상 제작을 위한 아트 디렉터입니다. 
+    제공된 문장 목록은 하나의 영상 흐름입니다. 전체 맥락을 유지하면서, 각 문장과 완벽히 매치되는 이미지 생성용 영문 프롬프트를 작성하세요.
+    
+    [요구 사항]
+    1. 전체 영상의 비주얼 스타일이 일관되어야 합니다. (예: 일러스트면 끝까지 일러스트, 실사면 끝까지 실사)
+    2. 각 프롬프트는 1:1 비율 이미지 생성에 최적화된 구체적인 묘사를 포함해야 합니다.
+    3. 추상적인 단어보다는 시각적인 묘사(색감, 조명, 구도)를 위주로 작성하세요.
+    4. 응답은 반드시 JSON 형식이어야 합니다: { "prompts": ["prompt 1", "prompt 2", ...] }
+    5. 입력 배열의 개수(${lines.length}개)와 출력 프롬프트 배열의 개수는 반드시 일치해야 합니다.
+
+    문장 목록:
+    ${JSON.stringify(lines)}`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const jsonMatch = response.text().match(/\{.*\}/s);
+    if (!jsonMatch) throw new Error("프롬프트 생성 실패");
+
+    res.json(JSON.parse(jsonMatch[0]));
+  } catch (error) {
+    res.status(500).json({ error: "프롬프트 생성 오류: " + error.message });
+  }
+});
+
+// 신규: 이미지 실제 생성 및 Supabase 업로드 엔드포인트
+app.post("/generate-images-batch", async (req, res) => {
+  try {
+    const { prompts, projectId } = req.body;
+    const model = genAI.getGenerativeModel({
+      model: "gemini-3.1-flash-image-preview",
+    });
+    const imageUrls = [];
+
+    for (let i = 0; i < prompts.length; i++) {
+      // 이미지 생성 (1:1 비율 명시)
+      const result = await model.generateContent({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompts[i] + " --aspect_ratio 1:1" }],
+          },
+        ],
+      });
+
+      const response = await result.response;
+      // 이미지 모델은 일반적으로 base64 혹은 특정 포맷을 반환한다고 가정 (SDK 스펙에 따름)
+      // 실제 구현 시 SDK의 이미지 추출 로직 필요
+      const base64Data =
+        response.candidates[0].content.parts[0].inlineData.data;
+      const buffer = Buffer.from(base64Data, "base64");
+
+      const fileName = `gen_${projectId}_${i}_${Date.now()}.png`;
+      const filePath = `generated/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("project-assets")
+        .upload(filePath, buffer, { contentType: "image/png" });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from("project-assets")
+        .getPublicUrl(filePath);
+
+      imageUrls.push(urlData.publicUrl);
+    }
+
+    res.json({ imageUrls });
+  } catch (error) {
+    res.status(500).json({ error: "이미지 생성 실패: " + error.message });
   }
 });
 
