@@ -132,11 +132,10 @@ app.post("/generate-image-prompts", async (req, res) => {
   }
 });
 
-// 모델 변경: gemini-2.5-flash-image 및 2초 간격 추가
+// 모델 및 로직 변경: gemini-3.1-flash-image-preview 및 2초 간격
 app.post("/generate-images-batch", async (req, res) => {
   try {
     const { prompts, projectId } = req.body;
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-image" });
     const imageUrls = [];
 
     for (let i = 0; i < prompts.length; i++) {
@@ -145,28 +144,28 @@ app.post("/generate-images-batch", async (req, res) => {
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
-      const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: prompts[i] }] }],
-        config: {
-          imageConfig: {
-            aspectRatio: "1:1",
-          },
-        },
-      });
+      // 제공된 최신 로직 규격에 맞춘 호출
+      const result = await genAI
+        .getGenerativeModel({ model: "gemini-3.1-flash-image-preview" })
+        .generateContent({
+          contents: [{ role: "user", parts: [{ text: prompts[i] }] }],
+        });
 
       const response = await result.response;
 
-      // 이미지 데이터 추출 안정성 확보
-      const candidate = response.candidates && response.candidates[0];
-      const part = candidate?.content?.parts?.find((p) => p.inlineData);
-
-      if (!part || !part.inlineData) {
-        throw new Error(`${i}번째 이미지 데이터 생성에 실패했습니다.`);
+      let base64Data = null;
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          base64Data = part.inlineData.data;
+          break;
+        }
       }
 
-      const base64Data = part.inlineData.data;
-      const buffer = Buffer.from(base64Data, "base64");
+      if (!base64Data) {
+        throw new Error(`${i}번째 이미지 데이터를 찾을 수 없습니다.`);
+      }
 
+      const buffer = Buffer.from(base64Data, "base64");
       const fileName = `gen_${projectId}_${i}_${Date.now()}.png`;
       const filePath = `generated/${fileName}`;
 
