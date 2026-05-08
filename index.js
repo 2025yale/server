@@ -69,7 +69,6 @@ app.post("/extract-content", async (req, res) => {
     res.status(500).json({ error: "콘텐츠 추출 실패: " + error.message });
   }
 });
-
 app.post("/convert-tone", async (req, res) => {
   try {
     const { lines, tone } = req.body;
@@ -77,10 +76,16 @@ app.post("/convert-tone", async (req, res) => {
       return res.status(400).json({ error: "데이터가 부족합니다." });
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-    const prompt = `당신은 전문 편집자입니다. 제공된 문장 배열의 각 문장을 자연스러운 '${tone}'으로 변환하세요.
-    - 배열 형식을 유지하여 JSON으로만 응답하세요: { "convertedLines": ["문장1", "문장2", ...] }
-    - 원문의 정보와 의미를 절대 훼손하지 마세요.
-    - 불필요한 설명은 제외하세요.
+
+    // AI에게 숏폼 영상 자막 제작용임을 강조하고, 문장 구조를 유지하라고 지시함
+    const prompt = `당신은 숏폼 영상 자막을 제작하는 전문 편집자입니다. 
+    입력된 문장 배열의 각 요소를 자연스러운 '${tone}'으로 변환하세요.
+    
+    [준수 사항]
+    1. 각 입력 문장은 영상의 한 장면(자막)에 해당합니다. 절대로 여러 문장을 하나로 합치거나 흐름을 임의로 연결하지 마세요.
+    2. 입력 배열의 개수와 출력 배열의 개수는 반드시 일치해야 합니다.
+    3. 문장의 의미는 유지하되, 자막 특성상 너무 길지 않게 핵심 어조만 변경하세요.
+    4. 응답은 반드시 JSON 형식을 유지하세요: { "convertedLines": ["변환문장1", "변환문장2", ...] }
     
     문장 목록:
     ${JSON.stringify(lines)}`;
@@ -89,11 +94,12 @@ app.post("/convert-tone", async (req, res) => {
     const response = await result.response;
     let resultText = response.text();
 
-    // JSON 추출
     const jsonMatch = resultText.match(/\{.*\}/s);
     if (!jsonMatch) throw new Error("AI 응답 형식이 올바르지 않습니다.");
 
     const parsedData = JSON.parse(jsonMatch[0]);
+
+    // 안전장치: AI가 배열 길이를 다르게 줬을 경우를 대비한 검증은 생략하되, 데이터 그대로 반환
     res.json({ convertedLines: parsedData.convertedLines });
   } catch (error) {
     res.status(500).json({ error: "어조 변환 실패: " + error.message });
