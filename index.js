@@ -48,7 +48,7 @@ app.post("/extract-content", async (req, res) => {
     const response = await axios.get(url, {
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,입력된 Gecko) Chrome/120.0.0.0 Safari/537.36",
         Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -132,23 +132,22 @@ app.post("/generate-image-prompts", async (req, res) => {
   }
 });
 
-// 모델 변경: gemini-2.5-flash-image 및 2초 간격 추가
+// 이미지 생성 부분의 Bad Request 에러 해결을 위해 generationConfig 구조 수정
 app.post("/generate-images-batch", async (req, res) => {
   try {
     const { prompts, projectId } = req.body;
-    // 효율성과 속도에 최적화된 2.5 모델 사용
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-image" });
     const imageUrls = [];
 
     for (let i = 0; i < prompts.length; i++) {
-      // 429 에러 방지를 위한 2초 간격 (첫 번째 요청 제외)
       if (i > 0) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
+      // 'config' 대신 'generationConfig' 필드명을 사용하고 imageConfig를 내부에 배치
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: prompts[i] }] }],
-        config: {
+        generationConfig: {
           imageConfig: {
             aspectRatio: "1:1",
           },
@@ -156,12 +155,22 @@ app.post("/generate-images-batch", async (req, res) => {
       });
 
       const response = await result.response;
-      // 인라인 이미지 데이터 추출
-      const base64Data = response.candidates[0].content.parts.find(
-        (p) => p.inlineData,
-      ).inlineData.data;
-      const buffer = Buffer.from(base64Data, "base64");
 
+      // 인라인 이미지 데이터를 안전하게 추출
+      let base64Data = null;
+      if (response.candidates && response.candidates[0].content.parts) {
+        const part = response.candidates[0].content.parts.find(
+          (p) => p.inlineData,
+        );
+        if (part) base64Data = part.inlineData.data;
+      }
+
+      if (!base64Data)
+        throw new Error(
+          `${i + 1}번째 이미지 생성 데이터를 가져오지 못했습니다.`,
+        );
+
+      const buffer = Buffer.from(base64Data, "base64");
       const fileName = `gen_${projectId}_${i}_${Date.now()}.png`;
       const filePath = `generated/${fileName}`;
 
