@@ -76,7 +76,7 @@ app.post("/convert-tone", async (req, res) => {
     if (!lines || !Array.isArray(lines) || !tone)
       return res.status(400).json({ error: "데이터가 부족합니다." });
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-lite" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
     const prompt = `당신은 숏폼 영상 자막을 제작하는 전문 편집자입니다. 
     입력된 문장 배열의 각 요소를 자연스러운 '${tone}'으로 변환하세요.
@@ -108,7 +108,7 @@ app.post("/convert-tone", async (req, res) => {
 app.post("/generate-image-prompts", async (req, res) => {
   try {
     const { lines } = req.body;
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
     const prompt = `당신은 영상 제작을 위한 아트 디렉터입니다. 
     제공된 문장 목록은 하나의 영상 흐름입니다. 전체 맥락을 유지하면서, 각 문장과 완벽히 매치되는 이미지 생성용 영문 프롬프트를 작성하세요.
