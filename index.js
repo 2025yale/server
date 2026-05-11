@@ -132,19 +132,16 @@ app.post("/generate-image-prompts", async (req, res) => {
   }
 });
 
-// 모델 및 로직 변경: gemini-3.1-flash-image-preview 및 2초 간격
 app.post("/generate-images-batch", async (req, res) => {
   try {
     const { prompts, projectId } = req.body;
     const imageUrls = [];
 
     for (let i = 0; i < prompts.length; i++) {
-      // 429 에러 방지를 위한 2초 간격 (첫 번째 요청 제외)
       if (i > 0) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
-      // 제공된 최신 로직 규격에 맞춘 호출
       const result = await genAI
         .getGenerativeModel({ model: "gemini-3.1-flash-image-preview" })
         .generateContent({
@@ -237,12 +234,21 @@ app.post("/render", async (req, res) => {
       if (!track || !track.visible) continue;
       for (const clip of track.clips) {
         filterCounter++;
-        if (["video", "image", "text"].includes(clip.type)) {
+        // 수정 부분: "shape" 타입을 렌더링 대상에 추가합니다.
+        if (["video", "image", "text", "shape"].includes(clip.type)) {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
-          if (clip.type === "text" && clip.textImage) {
-            const textImgPath = path.join(tempDir, `text_${filterCounter}.png`);
+          // 수정 부분: "shape" 타입도 "text"와 마찬가지로 클라이언트에서 생성한 이미지를 파일로 저장하여 사용합니다.
+          if (
+            (clip.type === "text" || clip.type === "shape") &&
+            clip.textImage
+          ) {
+            const imgType = clip.type === "text" ? "text" : "shape";
+            const textImgPath = path.join(
+              tempDir,
+              `${imgType}_${filterCounter}.png`,
+            );
             const base64Data = clip.textImage.replace(
               /^data:image\/png;base64,/,
               "",
@@ -256,8 +262,11 @@ app.post("/render", async (req, res) => {
           const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
+          // 수정 부분: shape 타입도 realHeight를 사용하여 이미지 비율을 정확히 맞춥니다.
           const h = Math.round(
-            (clip.type === "text" ? clip.realHeight : clip.height) * scaleRatio,
+            (clip.type === "text" || clip.type === "shape"
+              ? clip.realHeight
+              : clip.height) * scaleRatio,
           );
 
           let targetW = w;
@@ -265,7 +274,8 @@ app.post("/render", async (req, res) => {
           let finalX = clip.x * scaleRatio - w / 2;
           let finalY = clip.y * scaleRatio - h / 2;
 
-          if (clip.type === "text") {
+          // 수정 부분: shape 타입도 클라이언트에서 적용된 패딩값을 보정하여 렌더링 위치를 맞춥니다.
+          if (clip.type === "text" || clip.type === "shape") {
             const p = (clip.textPadding || 0) * scaleRatio;
             targetW = w + p * 2;
             targetH = h + p * 2;
