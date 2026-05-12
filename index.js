@@ -234,17 +234,19 @@ app.post("/render", async (req, res) => {
       if (!track || !track.visible) continue;
       for (const clip of track.clips) {
         filterCounter++;
-        // 수정 부분: "shape" 타입을 렌더링 대상에 추가합니다.
-        if (["video", "image", "text", "shape"].includes(clip.type)) {
+        // 수정: "rect" 타입을 렌더링 대상에 추가합니다.
+        if (["video", "image", "text", "shape", "rect"].includes(clip.type)) {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
-          // 수정 부분: "shape" 타입도 "text"와 마찬가지로 클라이언트에서 생성한 이미지를 파일로 저장하여 사용합니다.
+          // 수정: "rect" 타입도 "text"나 "shape"와 동일하게 textImage 필드를 사용합니다.
           if (
-            (clip.type === "text" || clip.type === "shape") &&
+            (clip.type === "text" ||
+              clip.type === "shape" ||
+              clip.type === "rect") &&
             clip.textImage
           ) {
-            const imgType = clip.type === "text" ? "text" : "shape";
+            const imgType = clip.type;
             const textImgPath = path.join(
               tempDir,
               `${imgType}_${filterCounter}.png`,
@@ -262,10 +264,12 @@ app.post("/render", async (req, res) => {
           const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
-          // 수정 부분: shape 타입도 realHeight를 사용하여 이미지 비율을 정확히 맞춥니다.
+          // 수정: rect 타입도 realHeight를 사용하거나 기본 height를 비율에 맞게 적용합니다.
           const h = Math.round(
-            (clip.type === "text" || clip.type === "shape"
-              ? clip.realHeight
+            (clip.type === "text" ||
+            clip.type === "shape" ||
+            clip.type === "rect"
+              ? clip.realHeight || clip.height
               : clip.height) * scaleRatio,
           );
 
@@ -274,8 +278,12 @@ app.post("/render", async (req, res) => {
           let finalX = clip.x * scaleRatio - w / 2;
           let finalY = clip.y * scaleRatio - h / 2;
 
-          // 수정 부분: shape 타입도 클라이언트에서 적용된 패딩값을 보정하여 렌더링 위치를 맞춥니다.
-          if (clip.type === "text" || clip.type === "shape") {
+          // 수정: rect 타입도 패딩 보정을 적용합니다.
+          if (
+            clip.type === "text" ||
+            clip.type === "shape" ||
+            clip.type === "rect"
+          ) {
             const p = (clip.textPadding || 0) * scaleRatio;
             targetW = w + p * 2;
             targetH = h + p * 2;
