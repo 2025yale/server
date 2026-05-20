@@ -185,6 +185,84 @@ app.post("/generate-images-batch", async (req, res) => {
   }
 });
 
+// TYPECAST API - 목소리 리스트 로드
+app.get("/typecast-actors", async (req, res) => {
+  try {
+    const response = await axios.get("https://typecast.ai/api/actor", {
+      headers: { Authorization: `Bearer ${process.env.TYPECAST_API_KEY}` },
+    });
+    res.json(response.data.result || []);
+  } catch (error) {
+    res.status(500).json({ error: "성우 리스트 로딩 실패: " + error.message });
+  }
+});
+
+// TYPECAST API - 단일 문장 TTS 생성 및 백엔드 경유 다운로드 업로드
+app.post("/generate-tts", async (req, res) => {
+  try {
+    const { text, actorId, speed, projectId } = req.body;
+
+    // 1. 발화 요청 (Speak V2)
+    const speakRes = await axios.post(
+      "https://typecast.ai/api/speak",
+      {
+        actor_id: actorId,
+        text: text,
+        lang: "auto",
+        xapi_hd: true,
+        model_version: "latest",
+        speech_speed: parseFloat(speed) || 1.0,
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.TYPECAST_API_KEY}` },
+      },
+    );
+
+    const speakUrl = speakRes.data.result.speak_v2_url;
+
+    // 2. 오디오 생성 완료 대기 (최대 30초 폴링)
+    let downloadUrl = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const pollRes = await axios.get(speakUrl, {
+        headers: { Authorization: `Bearer ${process.env.TYPECAST_API_KEY}` },
+      });
+
+      const status = pollRes.data.result.status;
+      if (status === "done") {
+        downloadUrl = pollRes.data.result.audio_download_url;
+        break;
+      } else if (status === "failed") {
+        throw new Error("Typecast 생성 오류 발생");
+      }
+    }
+
+    if (!downloadUrl) throw new Error("TTS 생성 시간 초과");
+
+    // 3. 브라우저 CORS 방지 및 영구 보존을 위한 Supabase 백업 업로드
+    const audioBufferRes = await axios.get(downloadUrl, {
+      responseType: "arraybuffer",
+    });
+    const buffer = Buffer.from(audioBufferRes.data);
+    const fileName = `tts_${projectId}_${Date.now()}.wav`;
+    const filePath = `generated/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("project-assets")
+      .upload(filePath, buffer, { contentType: "audio/wav" });
+
+    if (uploadError) throw uploadError;
+
+    const { data: urlData } = supabase.storage
+      .from("project-assets")
+      .getPublicUrl(filePath);
+
+    res.json({ audioUrl: urlData.publicUrl });
+  } catch (error) {
+    res.status(500).json({ error: "TTS 생성 실패: " + error.message });
+  }
+});
+
 app.post("/render", async (req, res) => {
   try {
     const { projectId, tracks, settings, socketId } = req.body;
@@ -234,12 +312,10 @@ app.post("/render", async (req, res) => {
       if (!track || !track.visible) continue;
       for (const clip of track.clips) {
         filterCounter++;
-        // 수정: "rect" 타입을 렌더링 대상에 추가합니다.
         if (["video", "image", "text", "shape", "rect"].includes(clip.type)) {
           const inputIdx = currentInputIndex++;
           let currentInputPath = clip.url;
 
-          // 수정: "rect" 타입도 "text"나 "shape"와 동일하게 textImage 필드를 사용합니다.
           if (
             (clip.type === "text" ||
               clip.type === "shape" ||
@@ -264,7 +340,6 @@ app.post("/render", async (req, res) => {
           const outputLabel = `v${filterCounter}out`;
 
           const w = Math.round(clip.width * scaleRatio);
-          // 수정: rect 타입도 realHeight를 사용하거나 기본 height를 비율에 맞게 적용합니다.
           const h = Math.round(
             (clip.type === "text" ||
             clip.type === "shape" ||
@@ -278,7 +353,6 @@ app.post("/render", async (req, res) => {
           let finalX = clip.x * scaleRatio - w / 2;
           let finalY = clip.y * scaleRatio - h / 2;
 
-          // 수정: rect 타입도 패딩 보정을 적용합니다.
           if (
             clip.type === "text" ||
             clip.type === "shape" ||
